@@ -77,24 +77,14 @@ Reference them in config via the `app` capability (path can be relative to proje
 
 Do not commit secrets. Wait for confirmation before moving to the next phase.
 
-Desktop (macOS) Execution Notes (Appium Mac2 + TestNG + Allure)
-Prerequisites (Mac2)
-Install Xcode and ensure xcodebuild works:
+## Desktop (macOS) app automation
 
-xcode-select -p
-xcodebuild -version
-Enable Automation Mode without authentication (required by Mac2 on recent macOS):
+To run **native `.app`** tests with **Appium Mac2** (sample: `LaunchDesktopAppTest`), see the full guide:
 
-sudo automationmodetool enable-automationmode-without-authentication
+**[docs/DESKTOP_MAC.md](docs/DESKTOP_MAC.md)** — prerequisites, Xcode/automation mode, Appium + mac2 install, `dev.properties` capabilities, Maven command, Allure, troubleshooting.
 
-Ensure Accessibility permission is granted for the relevant apps (especially what runs Appium/Xcode helpers):
+Quick run (from repo root, Appium already listening on `4723`):
 
-System Settings → Privacy & Security → Accessibility
-
-Appium Mac2 server
-Install the mac2 driver (once):
-appium driver install mac2
-Start Appium server (keep it running in this terminal):
-appium server --address 127.0.0.1 --port 4723
-
-lsof -i :4723
+```bash
+mvn -pl automation -am -Dtest=com.mobile.automation.desktop.mac.LaunchDesktopAppTest test
+```
