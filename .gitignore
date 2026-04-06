@@ -1,0 +1,46 @@
+# Build
+target/
+build/
+out/
+*.jar
+*.war
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# Allure
+allure-results/
+allure-report/
+.allure/
+
+# Logs
+*.log
+logs/
+
+# App binaries (large; use CI or shared storage; keep path in config)
+apps/*.apk
+apps/*.ipa
+apps/*.app
+# apps/ folder itself can be committed empty or with a .gitkeep
+
+# Local / secrets (never commit)
+.env
+.env.local
+*.local.properties
+secrets/
+**/local*.properties
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Maven
+pom.xml.tag
+pom.xml.releaseBackup
+.release/

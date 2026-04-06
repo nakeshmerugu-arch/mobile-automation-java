@@ -1,0 +1,3 @@
+# Place APK (Android) and IPA / .app (iOS) files here.
+# Set the path in config, e.g. app=apps/MyApp.apk
+# Binary files (*.apk, *.ipa) are gitignored.
