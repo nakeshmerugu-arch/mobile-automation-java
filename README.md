@@ -33,11 +33,13 @@ cd automation && mvn allure:serve
 
 From root, `mvn clean test` runs the automation module's tests. Allure results are under `automation/target/allure-results`. Run `mvn allure:serve` from the `automation` directory to view the report.
 
-**Run a single test** (e.g. `LaunchAppTest`): build the `core` dependency and run only that test:
+**Run a single test** (e.g. `LaunchAppTest`, Android): build the `core` dependency, set `app=` in `automation/src/test/resources/config/dev.properties`, then:
 
 ```bash
 mvn test -pl automation -am -Dtest=LaunchAppTest -Dsurefire.failIfNoSpecifiedTests=false
 ```
+
+For the **macOS desktop** sample, use `-Denv=mac` and `LaunchDesktopAppTest` (see [docs/DESKTOP_MAC.md](docs/DESKTOP_MAC.md)).
 
 Always run from the **project root**. Using `-pl automation` alone skips building `core`, which will cause "Could not find artifact com.mobile.automation:core".
 
@@ -81,10 +83,12 @@ Do not commit secrets. Wait for confirmation before moving to the next phase.
 
 To run **native `.app`** tests with **Appium Mac2** (sample: `LaunchDesktopAppTest`), see the full guide:
 
-**[docs/DESKTOP_MAC.md](docs/DESKTOP_MAC.md)** — prerequisites, Xcode/automation mode, Appium + mac2 install, `dev.properties` capabilities, Maven command, Allure, troubleshooting.
+**[docs/DESKTOP_MAC.md](docs/DESKTOP_MAC.md)** — prerequisites, Xcode/automation mode, Appium + mac2 install, **`mac.properties`** (via **`-Denv=mac`**), Maven command, Allure, troubleshooting.
 
 Quick run (from repo root, Appium already listening on `4723`):
 
 ```bash
-mvn -pl automation -am -Dtest=com.mobile.automation.desktop.mac.LaunchDesktopAppTest test
+mvn -pl automation -am -Denv=mac -Dtest=com.mobile.automation.desktop.mac.LaunchDesktopAppTest test
 ```
+
+**Mobile (Android)** uses the default `dev` profile. Put your build at `apps/ajaib-android.apk` (or edit `app=` in `dev.properties`). **Desktop (Mac)** requires `-Denv=mac` so `mac.properties` is loaded.

@@ -9,15 +9,14 @@ import org.openqa.selenium.OutputType;
 import org.openqa.selenium.TakesScreenshot;
 import org.testng.ITestResult;
 import org.testng.annotations.AfterMethod;
-import org.testng.annotations.BeforeMethod;
 
 import java.io.ByteArrayInputStream;
 import java.util.Optional;
 
 /**
- * Base class for tests. Handles driver lifecycle (init from config in @BeforeMethod, quit in @AfterMethod)
- * and attaches screenshot on failure. Tests must not initialize the driver; they use {@link #getDriver()}
- * when they need it (e.g. to pass to pages/flows).
+ * Base class for tests. Creates the driver lazily on first {@link #getDriver()} when config is complete, quits in
+ * {@code @AfterMethod}, and attaches a screenshot on failure. Tests that do not call {@link #getDriver()} skip Appium
+ * (e.g. smoke tests without a device).
  */
 public abstract class BaseTest {
     /**
@@ -26,19 +25,6 @@ public abstract class BaseTest {
      */
     private boolean shouldKeepDriverAlive() {
         return Boolean.parseBoolean(System.getProperty("keep.driver.alive", "false"));
-    }
-
-    /**
-     * Initializes the driver when config is available (appium.server.url and platformName set).
-     * When config is incomplete, driver is not created so tests that do not need a device can still run.
-     */
-    @BeforeMethod(alwaysRun = true)
-    public void initDriverIfConfigured() {
-        Optional<DriverConfig> config = DriverConfigLoader.load();
-        config.ifPresent(c -> {
-            preInitDriver(c);
-            DriverManager.getInstance().initDriver(c.getAppiumServerUrl(), c.getCapabilities());
-        });
     }
 
     /**
@@ -66,11 +52,18 @@ public abstract class BaseTest {
     }
 
     /**
-     * Returns the current thread's driver. Use when building pages or flows. Throws if no driver was initialized
-     * (e.g. config was incomplete).
+     * Returns the current thread's driver, creating it on first use from {@link DriverConfigLoader} when possible.
      */
     protected AppiumDriver getDriver() {
-        return DriverManager.getInstance().getDriver();
+        DriverManager manager = DriverManager.getInstance();
+        if (!manager.hasDriver()) {
+            Optional<DriverConfig> config = DriverConfigLoader.load();
+            config.ifPresent(c -> {
+                preInitDriver(c);
+                manager.initDriver(c.getAppiumServerUrl(), c.getCapabilities());
+            });
+        }
+        return manager.getDriver();
     }
 
     /**

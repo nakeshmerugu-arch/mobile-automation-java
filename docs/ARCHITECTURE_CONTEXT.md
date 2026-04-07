@@ -106,14 +106,14 @@ Architecture decisions must allow extension without refactoring core layers.
 
 ## Driver layer (Phase 2)
 
-- **DriverFactory**: Creates `AndroidDriver` or `IOSDriver` from `URL` + `Capabilities`. Platform is taken from capability `platformName` (or `appium:platformName`). No static driver.
-- **DriverManager**: Singleton that holds `ThreadLocal<AppiumDriver>`. Use `getInstance()` then `initDriver(URL, Capabilities)` or `initDriver(String, Capabilities)` to create and set the driver for the current thread; `getDriver()` to retrieve; `quitDriver()` to quit and clear. Lifecycle is intended to be driven by BaseTest (`@BeforeMethod` / `@AfterMethod`).
+- **DriverFactory**: Creates `AndroidDriver`, `IOSDriver`, or `Mac2Driver` from `URL` + `Capabilities`. Platform is taken from capability `platformName` (or `appium:platformName`). No static driver.
+- **DriverManager**: Singleton that holds `ThreadLocal<AppiumDriver>`. Use `getInstance()` then `initDriver(URL, Capabilities)` or `initDriver(String, Capabilities)` to create and set the driver for the current thread; `getDriver()` to retrieve; `quitDriver()` to quit and clear. `BaseTest` calls `initDriver` from the first `getDriver()` in a test and `quitDriver` from `@AfterMethod`.
 
 ## Base abstractions (Phase 3)
 
 - **DriverConfig** (core): Interface for Appium server URL and capabilities. **PropertiesDriverConfig** builds from `Properties`; required keys: `appium.server.url`, `platformName`; other keys become capabilities.
 - **DriverConfigLoader** (automation test): Loads config from classpath `config/default.properties` and `config/{env}.properties` (env from system property `env` or `dev`). Returns `Optional<DriverConfig>`; if required keys are missing, driver is not initialized so tests without a device can still run.
-- **BaseTest** (automation test): `@BeforeMethod` inits driver when config is present; `@AfterMethod` quits driver and attaches screenshot on failure (Allure). Exposes `getDriver()` for pages/flows. Tests extend BaseTest and must not init the driver themselves.
+- **BaseTest** (automation test): Lazily inits the driver on first `getDriver()` when `DriverConfigLoader` returns config (runs `preInitDriver` before session start); `@AfterMethod` quits and attaches screenshot on failure (Allure). Tests that never call `getDriver()` skip Appium (e.g. smoke tests). Tests extend BaseTest and use `getDriver()` rather than constructing drivers directly.
 - **BasePage** (automation main): Constructor takes `AppiumDriver`; exposes `getDriver()` and `waitUtils()` for subclasses. Page layer uses it for element interaction only.
 
 ## Utilities (Phase 4)

@@ -2,6 +2,8 @@ package com.mobile.automation.desktop.mac;
 
 import com.mobile.automation.desktop.mac.pages.MainWindowPage;
 import com.mobile.automation.config.DriverConfig;
+import com.mobile.automation.config.DriverConfigLoader;
+import com.mobile.automation.driver.DriverManager;
 import com.mobile.automation.tests.BaseTest;
 
 import io.appium.java_client.AppiumDriver;
@@ -13,6 +15,7 @@ import org.testng.annotations.Test;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -86,6 +89,37 @@ public class LaunchDesktopAppTest extends BaseTest {
         return v == null ? "" : String.valueOf(v).trim();
     }
 
+    /**
+     * Fails fast with a clear message when {@code -Denv=mac} was omitted (default {@code dev} is Android).
+     */
+    private static void assertMacDesktopConfigOrThrow() {
+        Optional<DriverConfig> cfg = DriverConfigLoader.load();
+        if (cfg.isEmpty()) {
+            throw new IllegalStateException(
+                    "No driver classpath config (need appium.server.url + platformName). For this test run: "
+                    + "mvn -pl automation -am -Denv=mac -Dtest="
+                    + LaunchDesktopAppTest.class.getName()
+                    + " test");
+        }
+        Capabilities caps = cfg.get().getCapabilities();
+        String platform = nullSafeToString(caps.getCapability("platformName"));
+        if (platform.isBlank()) {
+            platform = nullSafeToString(caps.getCapability("appium:platformName"));
+        }
+        if (platform.equalsIgnoreCase("mac")) {
+            return;
+        }
+        String env = System.getProperty("env", "dev");
+        throw new IllegalStateException(
+                "LaunchDesktopAppTest needs Mac2 (platformName=Mac), but env=\""
+                + env
+                + "\" resolved to platformName="
+                + (platform.isBlank() ? "(missing)" : platform)
+                + ". Default env is Android. Run: mvn -pl automation -am -Denv=mac -Dtest="
+                + LaunchDesktopAppTest.class.getName()
+                + " test — see docs/DESKTOP_MAC.md");
+    }
+
     private static boolean isBundleRunning(String bundleId) {
         // Use AppleScript to count processes with a given bundle identifier.
         // Example expression returns a number.
@@ -113,6 +147,7 @@ public class LaunchDesktopAppTest extends BaseTest {
 
     @Test(groups = "mac", description = "Launch macOS app, verify main window, interact with a UI element")
     public void launchDesktopAppAndInteract() {
+        assertMacDesktopConfigOrThrow();
         AppiumDriver driver = getDriver();
         Object currentBundleId = driver.getCapabilities().getCapability("CFBundleIdentifier");
         Allure.addAttachment("mac2:CFBundleIdentifier", String.valueOf(currentBundleId == null ? "" : currentBundleId), "text/plain");
@@ -166,7 +201,7 @@ public class LaunchDesktopAppTest extends BaseTest {
         //attachScreenshot("Mac back on login screen");
 
         mainWindow.closeWindowAfterLogin();
-        getDriver().quit();
+        DriverManager.getInstance().quitDriver();
     }
 
 }

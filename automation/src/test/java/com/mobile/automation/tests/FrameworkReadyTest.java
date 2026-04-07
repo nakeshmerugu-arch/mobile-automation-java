@@ -4,8 +4,8 @@ import org.testng.Assert;
 import org.testng.annotations.Test;
 
 /**
- * Placeholder test to verify Phase 1–3 setup: build, TestNG, Allure, and BaseTest lifecycle.
- * Does not require a real Appium server (config has no appium.server.url). Remove or repurpose when real tests are added.
+ * Smoke test: build, TestNG, Allure, BaseTest lifecycle. Does not call {@code getDriver()}, so no Appium session is
+ * started and no device/APK is required.
  */
 public class FrameworkReadyTest extends BaseTest {
 

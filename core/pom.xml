@@ -53,6 +53,15 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- No tests in core. When running e.g. mvn -pl automation -am -Dtest=SomeClass test, the same
+                         -Dtest filter applies to upstream modules; skipping here avoids Surefire failing on "no tests matched". -->
+                    <skipTests>true</skipTests>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

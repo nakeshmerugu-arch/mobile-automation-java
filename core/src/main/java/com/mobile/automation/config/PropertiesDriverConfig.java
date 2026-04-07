@@ -65,9 +65,7 @@ public final class PropertiesDriverConfig implements DriverConfig {
             String value = properties.getProperty(key);
             if (value != null && !value.isBlank()) {
                 value = value.trim();
-                if ("app".equals(key)) {
-                    value = toAbsoluteAppPath(value);
-                }
+                value = resolveFilesystemPathCapability(key, value);
                 options.setCapability(key, toCapabilityValue(value));
             }
         }
@@ -91,6 +89,21 @@ public final class PropertiesDriverConfig implements DriverConfig {
             return Boolean.FALSE;
         }
         return value;
+    }
+
+    /**
+     * Makes local bundle paths absolute for capabilities that point at files on disk (so Appium sees them even when
+     * the server's cwd differs). Skips http(s) remote URLs. Applies to {@code app}, {@code appium:appPath}, {@code appium:app}.
+     */
+    private static String resolveFilesystemPathCapability(String key, String value) {
+        if (!("app".equals(key) || "appium:appPath".equals(key) || "appium:app".equals(key))) {
+            return value;
+        }
+        String v = value.trim();
+        if (v.regionMatches(true, 0, "http://", 0, 7) || v.regionMatches(true, 0, "https://", 0, 8)) {
+            return value;
+        }
+        return toAbsoluteAppPath(value);
     }
 
     private static String toAbsoluteAppPath(String path) {

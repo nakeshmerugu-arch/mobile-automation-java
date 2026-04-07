@@ -92,22 +92,23 @@ Config is loaded from the **classpath** in the `automation` module:
 1. `automation/src/test/resources/config/default.properties`  
 2. `automation/src/test/resources/config/<env>.properties` (merged on top)
 
-Environment name: JVM property **`env`**, default **`dev`**. So by default **`config/dev.properties`** is used.
+Environment name: JVM property **`env`**, default **`dev`** (**Android**). For desktop runs, set **`-Denv=mac`** so **`config/mac.properties`** is merged (see mobile vs desktop in the repo **README**).
 
-Example override:
+Example overrides:
 
 ```bash
+-Denv=mac
 -Denv=stg
 ```
 
-### Important properties for Mac (see `dev.properties`)
+### Important properties for Mac (see `mac.properties`)
 
 | Property | Purpose |
 |----------|---------|
 | `appium.server.url` | Appium base URL, e.g. `http://127.0.0.1:4723` |
 | `platformName` | Must be **`Mac`** for desktop |
 | `appium:automationName` | **`Mac2`** |
-| `appium:appPath` | **Absolute** path to the `.app` bundle (spaces: escape with `\ ` in `.properties`) |
+| `appium:appPath` | Path to the `.app` bundle (**relative** to the automation module or **absolute**; spaces: escape with `\ ` in `.properties`) |
 | `appium:bundleId` | CFBundleIdentifier (e.g. `com.example.app`) |
 | `appium:appWaitForLaunch` | `true` helps wait for the process to come up |
 | `appium:skipAppKill` | `false` often helps avoid stale processes between runs |
@@ -137,12 +138,13 @@ It is **not** included in the default `testng.xml` suite—you run it by **fully
 From **repository root**:
 
 ```bash
-mvn -pl automation -am -Dtest=com.mobile.automation.desktop.mac.LaunchDesktopAppTest test
+mvn -pl automation -am -Denv=mac -Dtest=com.mobile.automation.desktop.mac.LaunchDesktopAppTest test
 ```
 
 Flags:
 
 - **`-pl automation -am`** — builds `core` and runs tests in `automation`.
+- **`-Denv=mac`** — loads `config/mac.properties` (Mac2 + `appium:appPath`). The default **`dev`** profile is Android and is wrong for this test.
 - **`-Dtest=...`** — single class (Surefire).
 
 If Surefire reports no tests, add:
