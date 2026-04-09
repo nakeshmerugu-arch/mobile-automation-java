@@ -35,6 +35,19 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 sudo /usr/sbin/automationmodetool enable-automationmode-without-authentication
 ```
 
+(Validate the tool exists first if you hit `command not found`.)
+
+```bash
+ls -l /usr/sbin/automationmodetool
+```
+
+If the file is missing, verify Xcode is installed and the active developer directory is correct:
+
+```bash
+xcode-select -p
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+```
+
 (Reboot may be required after changing this.)
 
 ### Accessibility
@@ -127,6 +140,16 @@ cd /path/to/mobile-automation-java
 mvn -q -pl automation -am -DskipTests compile
 ```
 
+## Optional preflight check
+
+Run the preflight script to validate common Mac2 prerequisites (macOS, Xcode path, `automationmodetool`, Node/npm, Appium/mac2 driver, and port `4723` listener):
+
+```bash
+./scripts/mac2-preflight.sh
+```
+
+If it reports failures, fix the listed items and re-run until only PASS/WARN remain.
+
 ## Run the desktop sample test
 
 The test class is:
@@ -185,6 +208,7 @@ cd automation && mvn allure:serve
 |---------|----------------|
 | **Session / launch failed** | App path absolute? Bundle opens in Finder? `xattr -cr`? `bundleId` matches? |
 | **“Accessibility not loaded” / empty tree** | Permissions; app foreground; wait longer after launch. |
+| **`/usr/sbin/automationmodetool: command not found`** | Run `ls -l /usr/sbin/automationmodetool`; if missing, install/open Xcode once and re-run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`, then retry the command. |
 | **Very slow PIN or update steps** | Avoid committing huge blobs; tests use element-first waits—ensure `getPageSource()` isn’t in a tight custom loop. |
 | **Git push timeout** | Don’t commit `.app` / `.dmg` / `node_modules`; keep binaries out of Git or use Git LFS. |
 
