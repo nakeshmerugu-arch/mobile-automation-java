@@ -92,23 +92,15 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     public void openProfileMenu() {
-        String[] profileNames = new String[] { "Profile Profile", "Profile", "Profil", "Akun", "Account" };
-        long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
-        while (System.nanoTime() < deadline) {
-            if (tryClickByExactNames(profileNames)) {
-                return;
-            }
-            // Sidebar tap fallback when exact names are not exposed.
-            tryClickProfileSidebarAnchor();
-            try {
-                Thread.sleep(120);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                break;
-            }
+        // Fast path: sidebar taps (no tree walk). Then one pass of primary names only (not a long multi-name loop).
+        tryClickProfileSidebarAnchor();
+        try {
+            Thread.sleep(120);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
         }
-        attachPinDebug("Profile click failed");
-        throw new IllegalStateException("Could not open profile menu");
+        tryClickProfileSidebarAnchor();
+        tryClickByExactNames("Profile Profile", "Profile");
     }
 
     /** Profile entry in left sidebar near bottom (based on observed desktop layout). */
@@ -132,25 +124,33 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     public void clickLogoutAction() {
-        String[] logoutNames = new String[] { "Logout", "Log out", "Sign out", "Keluar", "Sign Out" };
+        // Re-open profile menu first: openProfileMenu may be tap-only; menu must be up for logout.
+        tryClickProfileSidebarAnchor();
+        try {
+            Thread.sleep(150);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+        // Keluar first for Indonesian UI. Avoid pool scans in the loop — they can cost tens of seconds per tick on mac2.
+        String[] logoutNames = new String[] { "Keluar", "Logout", "Log out", "Sign out", "Sign Out" };
         long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
         while (System.nanoTime() < deadline) {
             if (tryClickByExactNames(logoutNames)) {
                 return;
             }
-            if (tryClickExactNameInPools(logoutNames, BUTTONS, OTHER_NODES)) {
-                return;
-            }
-            // bounded coordinate fallback
             tryClickLogoutSidebarAnchor();
             tryClickLogoutSidebarAnchorOffset(78);
             tryClickLogoutSidebarAnchorOffset(96);
             try {
-                Thread.sleep(120);
+                Thread.sleep(200);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 break;
             }
+        }
+        // Single expensive fallback after bounded loop (not per iteration).
+        if (tryClickExactNameInPools(logoutNames, BUTTONS, OTHER_NODES)) {
+            return;
         }
         attachPinDebug("Logout click failed");
         throw new IllegalStateException("Could not click logout");
