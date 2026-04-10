@@ -92,25 +92,28 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     public void openProfileMenu() {
-        // Fast path: sidebar taps (no tree walk). Then one pass of primary names only (not a long multi-name loop).
-        tryClickProfileSidebarAnchor();
-        try {
-            Thread.sleep(120);
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-        }
-        tryClickProfileSidebarAnchor();
-        tryClickByExactNames("Profile Profile", "Profile");
+        // Tap-only here so mac-timing for this step stays low; heavy By.name stays in clickLogoutAction.
+        tryClickProfileSidebarGuesses();
     }
 
-    /** Profile entry in left sidebar near bottom (based on observed desktop layout). */
-    private boolean tryClickProfileSidebarAnchor() {
+    /** Profile row in left sidebar: try several pixels — window chrome/layout shifts the hit target. */
+    private void tryClickProfileSidebarGuesses() {
+        int[] fromBottomPx = new int[] { 22, 30, 38, 46, 54, 62 };
+        int[] xOffsets = new int[] { 20, 28, 36 };
+        for (int xo : xOffsets) {
+            for (int fb : fromBottomPx) {
+                tryClickProfileSidebarAt(xo, fb);
+            }
+        }
+    }
+
+    private boolean tryClickProfileSidebarAt(int xOffsetFromLeft, int fromBottomPx) {
         try {
             var win = getDriver().manage().window();
             var pos = win.getPosition();
             var size = win.getSize();
-            int x = pos.getX() + 28;
-            int y = pos.getY() + Math.max(120, size.getHeight() - 34);
+            int x = pos.getX() + xOffsetFromLeft;
+            int y = pos.getY() + Math.max(120, size.getHeight() - fromBottomPx);
             PointerInput mouse = new PointerInput(PointerInput.Kind.MOUSE, "mouse");
             Sequence click = new Sequence(mouse, 1);
             click.addAction(mouse.createPointerMove(Duration.ZERO, PointerInput.Origin.viewport(), x, y));
@@ -124,18 +127,22 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     public void clickLogoutAction() {
-        // Re-open profile menu first: openProfileMenu may be tap-only; menu must be up for logout.
-        tryClickProfileSidebarAnchor();
+        // Ensure sheet is open: coordinate grid (fast) then one Profile name pass (moved here from openProfileMenu timing).
+        tryClickProfileSidebarGuesses();
         try {
-            Thread.sleep(150);
+            Thread.sleep(200);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         }
-        // Keluar first for Indonesian UI. Avoid pool scans in the loop — they can cost tens of seconds per tick on mac2.
-        String[] logoutNames = new String[] { "Keluar", "Logout", "Log out", "Sign out", "Sign Out" };
+        tryClickByExactNames("Profile Profile", "Profile");
+
+        // Loop: only primary logout labels — five By.name calls per tick can stall one iteration past the 8s budget.
+        String[] logoutHot = new String[] { "Keluar", "Logout" };
+        String[] logoutAll =
+                new String[] { "Keluar", "Logout", "Log out", "Sign out", "Sign Out" };
         long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
         while (System.nanoTime() < deadline) {
-            if (tryClickByExactNames(logoutNames)) {
+            if (tryClickByExactNames(logoutHot)) {
                 return;
             }
             tryClickLogoutSidebarAnchor();
@@ -148,8 +155,11 @@ public class MainWindowPage extends BaseMacPage {
                 break;
             }
         }
-        // Single expensive fallback after bounded loop (not per iteration).
-        if (tryClickExactNameInPools(logoutNames, BUTTONS, OTHER_NODES)) {
+        if (tryClickByExactNames(logoutAll)) {
+            return;
+        }
+        if (Boolean.parseBoolean(System.getProperty("mac.logout.poolFallback", "true"))
+                && tryClickExactNameInPools(logoutAll, BUTTONS, OTHER_NODES)) {
             return;
         }
         attachPinDebug("Logout click failed");
