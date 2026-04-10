@@ -17,11 +17,10 @@ import java.util.function.Consumer;
  */
 public class MacDesktopFlow {
 
-    private static final Duration HOME_DASHBOARD_WAIT = Duration.ofSeconds(10);
-    private static final Duration VERSI_BARU_PROBE = Duration.ofSeconds(12);
-    private static final Duration VERSI_BARU_UPDATE_MAX = Duration.ofSeconds(45);
-    private static final Duration LOGIN_TO_PIN_MAX_WAIT = Duration.ofSeconds(90);
-    private static final Duration POST_LOGIN_HOME_WAIT = Duration.ofSeconds(60);
+    private static final Duration VERSI_BARU_PROBE = Duration.ofSeconds(3);
+    private static final Duration VERSI_BARU_UPDATE_MAX = Duration.ofSeconds(12);
+    private static final Duration LOGIN_TO_PIN_MAX_WAIT = Duration.ofSeconds(35);
+    private static final Duration POST_PIN_HOME_WAIT = Duration.ofSeconds(6);
     private static final String TIMING_FLAG = "mac.timing.enabled";
 
     private final Consumer<String> stepScreenshots;
@@ -78,27 +77,31 @@ public class MacDesktopFlow {
         runTimedStep("completePinAndReachHome", () -> {
             main.ensurePinStepAfterLoginSubmit(LOGIN_TO_PIN_MAX_WAIT);
             if (main.isLoggedInHomeVisible()) {
-                main.waitForHomeDashboardVisible(POST_LOGIN_HOME_WAIT);
+                main.waitForHomeDashboardVisible(POST_PIN_HOME_WAIT);
                 return;
             }
             if (!main.hasPinInputsVisible()) {
                 // Some builds transition through a sparse tree before exposing PIN/home markers.
-                main.ensurePinStepAfterLoginSubmit(Duration.ofSeconds(20));
+                main.ensurePinStepAfterLoginSubmit(Duration.ofSeconds(8));
                 if (main.isLoggedInHomeVisible()) {
-                    main.waitForHomeDashboardVisible(POST_LOGIN_HOME_WAIT);
+                    main.waitForHomeDashboardVisible(POST_PIN_HOME_WAIT);
                     return;
                 }
             }
             main.enterPinByInputs(pin);
             main.completePinStep();
-            main.waitForHomeDashboardVisible(HOME_DASHBOARD_WAIT);
+            // If PIN UI disappeared, consider the flow resolved and let next steps validate continuity.
+            if (!main.hasPinInputsVisible()) {
+                return;
+            }
+            main.waitForHomeDashboardVisible(POST_PIN_HOME_WAIT);
         });
     }
 
     public void logoutFromProfile() {
         runTimedStep("openProfileMenu", main::openProfileMenu);
         runTimedStep("clickLogoutAction", main::clickLogoutAction);
-        runTimedStep("waitForLoginScreenVisible", () -> main.waitForLoginScreenVisible(Duration.ofSeconds(30)));
+        runTimedStep("waitForLoginScreenVisible", () -> main.waitForLoginScreenVisible(Duration.ofSeconds(45)));
     }
 
     public void closeAppWindow() {

@@ -1,0 +1,16 @@
+---
+description: Desktop-only Mac2 XCUI lightweight interaction rule
+globs: automation/src/{main,test}/java/com/mobile/automation/desktop/mac/**/*.java
+alwaysApply: false
+---
+
+# Desktop XCUI Lightweight Rules
+
+Scope: applies only to desktop Mac automation Java files (`desktop/mac`), not mobile app files.
+
+- Use XCUI-first interactions only (`By.name`, XCUI class names); avoid XPath in desktop flows/pages.
+- Prefer exact-name probes before broad `findElements` scans.
+- Keep retries bounded with short polling (tight timeouts, fail fast with debug context).
+- Avoid `getPageSource()` in tight loops; use it only as throttled fallback or failure debug.
+- For click targets with duplicate text, restrict candidate pools (button/pop-up nodes) to avoid heading/title clicks.
+- Add/keep step timing behind a Maven flag (e.g., `-Dmac.timing.enabled=true`) so diagnostics are optional.

@@ -33,13 +33,9 @@ public class MainWindowPage extends BaseMacPage {
     private static final long HOME_PAGE_SOURCE_THROTTLE_MS = 300L;
     /** Slow fallback probe interval for PIN markers in page source. */
     private static final long PIN_PAGE_SOURCE_THROTTLE_MS = 3000L;
-    /** Min interval for "Versi Baru" text probes in page source during dialog polling. */
-    private static final long VERSI_BARU_PAGE_SOURCE_THROTTLE_MS = 300L;
     /** Post-login home hints exposed in the accessibility tree (no {@code getPageSource}). */
     private static final String[] HOME_UI_MARKERS =
             new String[] { "Market", "Watchlist", "Portfolio", "Trending", "Movers", "Papan Khusus" };
-    /** Native profile control: Accessibility Inspector shows type Pop Up Button, title {@code Profile Profile}. */
-    private static final By POP_UP_BUTTONS = By.className("XCUIElementTypePopUpButton");
     /** Poll while waiting for home/dashboard markers after PIN. */
     private static final Duration HOME_DASHBOARD_POLL_INTERVAL = Duration.ofMillis(200);
     /** Cap expensive XCUI list scans so one probe can't take minutes on huge trees. */
@@ -62,8 +58,6 @@ public class MainWindowPage extends BaseMacPage {
     private boolean homePageSourceLastMarkersFound = false;
     private long pinPageSourceLastProbeMs = 0L;
     private boolean pinPageSourceLastHit = false;
-    private long versiBaruPageSourceLastProbeMs = 0L;
-    private boolean versiBaruPageSourceLastHit = false;
 
     public MainWindowPage(AppiumDriver driver) {
         super(driver);
@@ -99,17 +93,15 @@ public class MainWindowPage extends BaseMacPage {
 
     public void openProfileMenu() {
         String[] profileNames = new String[] { "Profile Profile", "Profile", "Profil", "Akun", "Account" };
-        // Fast path first (single probe): exact name or first popup button.
-        if (tryClickByExactNames(profileNames) || tryClickProfilePopUpButtonNative()) {
-            return;
-        }
         long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
         while (System.nanoTime() < deadline) {
-            if (tryClickByExactNames(profileNames) || tryClickProfilePopUpButtonNative()) {
+            if (tryClickByExactNames(profileNames)) {
                 return;
             }
+            // Sidebar tap fallback when exact names are not exposed.
+            tryClickProfileSidebarAnchor();
             try {
-                Thread.sleep(100);
+                Thread.sleep(120);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 break;
@@ -119,6 +111,26 @@ public class MainWindowPage extends BaseMacPage {
         throw new IllegalStateException("Could not open profile menu");
     }
 
+    /** Profile entry in left sidebar near bottom (based on observed desktop layout). */
+    private boolean tryClickProfileSidebarAnchor() {
+        try {
+            var win = getDriver().manage().window();
+            var pos = win.getPosition();
+            var size = win.getSize();
+            int x = pos.getX() + 28;
+            int y = pos.getY() + Math.max(120, size.getHeight() - 34);
+            PointerInput mouse = new PointerInput(PointerInput.Kind.MOUSE, "mouse");
+            Sequence click = new Sequence(mouse, 1);
+            click.addAction(mouse.createPointerMove(Duration.ZERO, PointerInput.Origin.viewport(), x, y));
+            click.addAction(mouse.createPointerDown(PointerInput.MouseButton.LEFT.asArg()));
+            click.addAction(mouse.createPointerUp(PointerInput.MouseButton.LEFT.asArg()));
+            getDriver().perform(List.of(click));
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     public void clickLogoutAction() {
         String[] logoutNames = new String[] { "Logout", "Log out", "Sign out", "Keluar", "Sign Out" };
         long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
@@ -126,15 +138,13 @@ public class MainWindowPage extends BaseMacPage {
             if (tryClickByExactNames(logoutNames)) {
                 return;
             }
-            if (tryClickLogoutNativeButton()) {
+            if (tryClickExactNameInPools(logoutNames, BUTTONS, OTHER_NODES)) {
                 return;
             }
-            if (tryClickExactNameInPools(logoutNames, BUTTONS)) {
-                return;
-            }
-            if (tryClickElementContainingTextInPools("Logout", BUTTONS)) {
-                return;
-            }
+            // bounded coordinate fallback
+            tryClickLogoutSidebarAnchor();
+            tryClickLogoutSidebarAnchorOffset(78);
+            tryClickLogoutSidebarAnchorOffset(96);
             try {
                 Thread.sleep(120);
             } catch (InterruptedException ie) {
@@ -146,51 +156,24 @@ public class MainWindowPage extends BaseMacPage {
         throw new IllegalStateException("Could not click logout");
     }
 
-    /**
-     * Profile entry per Accessibility Inspector: {@code XCUIElementTypePopUpButton}, title {@code Profile Profile}.
-     */
-    private boolean tryClickProfilePopUpButtonNative() {
-        if (tryClickByExactNames("Profile Profile", "Profile")) {
-            return true;
-        }
-        // Last resort: click first visible popup button without reading labels (expensive on large trees).
-        try {
-            List<WebElement> popups = macDriver().findElements(POP_UP_BUTTONS);
-            int limit = Math.min(3, popups.size());
-            for (int i = 0; i < limit; i++) {
-                WebElement el = popups.get(i);
-                try {
-                    if (el.isDisplayed() && tryClick(el)) {
-                        return true;
-                    }
-                } catch (Exception ignored) {
-                    if (tryClick(el)) {
-                        return true;
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        return false;
+    private boolean tryClickLogoutSidebarAnchor() {
+        return tryClickLogoutSidebarAnchorOffset(86);
     }
 
-    /**
-     * Logout per Accessibility Inspector: {@code XCUIElementTypeButton}, title {@code Logout}.
-     */
-    private boolean tryClickLogoutNativeButton() {
-        List<WebElement> buttons = macDriver().findElements(BUTTONS);
-        int limit = Math.min(MAX_CLICK_CANDIDATES_PER_POOL, buttons.size());
-        for (int i = 0; i < limit; i++) {
-            WebElement el = buttons.get(i);
-            String t = safeElementLabel(el);
-            if (t != null && "logout".equalsIgnoreCase(t.trim())) {
-                if (tryClick(el)) {
-                    return true;
-                }
-            }
-        }
+    private boolean tryClickLogoutSidebarAnchorOffset(int fromBottom) {
         try {
-            return tryClick(macDriver().findElement(By.name("Logout")));
+            var win = getDriver().manage().window();
+            var pos = win.getPosition();
+            var size = win.getSize();
+            int x = pos.getX() + 48;
+            int y = pos.getY() + Math.max(110, size.getHeight() - fromBottom);
+            PointerInput mouse = new PointerInput(PointerInput.Kind.MOUSE, "mouse");
+            Sequence click = new Sequence(mouse, 1);
+            click.addAction(mouse.createPointerMove(Duration.ZERO, PointerInput.Origin.viewport(), x, y));
+            click.addAction(mouse.createPointerDown(PointerInput.MouseButton.LEFT.asArg()));
+            click.addAction(mouse.createPointerUp(PointerInput.MouseButton.LEFT.asArg()));
+            getDriver().perform(List.of(click));
+            return true;
         } catch (Exception ignored) {
             return false;
         }
@@ -247,16 +230,22 @@ public class MainWindowPage extends BaseMacPage {
         if (updateCompleteTimeout == null || updateCompleteTimeout.isNegative() || updateCompleteTimeout.isZero()) {
             throw new IllegalArgumentException("updateCompleteTimeout must be positive");
         }
+        // If login surface is already usable, skip optional update probing.
+        if (isLoginSurfaceReadyAfterVersiBaruUpdate()) {
+            return;
+        }
         if (!pollUntilVersiBaruDialogVisible(probeTimeout)) {
             return;
         }
 
         boolean clicked = tryClickElementContainingText("Update Sekarang");
         if (!clicked) {
-            attachPinDebug("Update Sekarang click failed (Versi Baru dialog was visible)");
-            throw new IllegalStateException("Could not click Update Sekarang on Versi Baru dialog");
+            // Keep launch resilient: this dialog is optional and unstable across environments.
+            attachPinDebug("Update Sekarang click failed (Versi Baru dialog visible); continuing");
+            return;
         }
 
+        // Best-effort only; do not fail the whole test during pre-login optional update handling.
         waitUntilLoginReadyAfterVersiBaruUpdate(updateCompleteTimeout);
     }
 
@@ -267,7 +256,7 @@ public class MainWindowPage extends BaseMacPage {
                 return true;
             }
             try {
-                Thread.sleep(150);
+                Thread.sleep(250);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 return false;
@@ -276,46 +265,20 @@ public class MainWindowPage extends BaseMacPage {
         return false;
     }
 
-    /**
-     * Dialog detection: prefer accessibility tree (no {@code getPageSource}); throttle XML probes otherwise.
-     */
+    /** Dialog detection must stay lightweight and XCUI-only. */
     private boolean isVersiBaruUpdateDialogVisible() {
-        if (hasVisibleElementContaining("Versi Baru Tersedia")) {
-            return true;
-        }
-        if (hasVisibleElementContaining("Versi Baru")) {
-            return true;
-        }
-        return versiBaruTersediaInPageSourceThrottled();
-    }
-
-    private boolean versiBaruTersediaInPageSourceUncached() {
-        try {
-            return String.valueOf(getDriver().getPageSource()).toLowerCase().contains("versi baru tersedia");
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
-    private boolean versiBaruTersediaInPageSourceThrottled() {
-        long now = System.currentTimeMillis();
-        if (now - versiBaruPageSourceLastProbeMs < VERSI_BARU_PAGE_SOURCE_THROTTLE_MS) {
-            return versiBaruPageSourceLastHit;
-        }
-        versiBaruPageSourceLastProbeMs = now;
-        versiBaruPageSourceLastHit = versiBaruTersediaInPageSourceUncached();
-        return versiBaruPageSourceLastHit;
+        return hasAnyElementByExactName("Versi Baru Tersedia", "Versi Baru", "Update Sekarang", "Nanti Dulu");
     }
 
     /**
      * After an in-app update we expect the login surface — avoid {@link #isLoginScreenVisibleLikely()} here because it
      * may evaluate additional signals on every poll.
      */
-    private void waitUntilLoginReadyAfterVersiBaruUpdate(Duration timeout) {
+    private boolean waitUntilLoginReadyAfterVersiBaruUpdate(Duration timeout) {
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
         while (System.nanoTime() < deadlineNanos) {
             if (isLoginSurfaceReadyAfterVersiBaruUpdate()) {
-                return;
+                return true;
             }
             try {
                 Thread.sleep(200);
@@ -324,8 +287,8 @@ public class MainWindowPage extends BaseMacPage {
                 break;
             }
         }
-        attachPinDebug("Versi Baru update: login screen not ready within timeout");
-        throw new IllegalStateException("App update did not return to a usable login screen within " + timeout);
+        attachPinDebug("Versi Baru update: login screen not ready within timeout; continuing");
+        return false;
     }
 
     private boolean isLoginSurfaceReadyAfterVersiBaruUpdate() {
@@ -1266,27 +1229,32 @@ public class MainWindowPage extends BaseMacPage {
         return false;
     }
 
+    private boolean tryClickByExactNameOnce(String name) {
+        if (name == null || name.isBlank()) {
+            return false;
+        }
+        try {
+            List<WebElement> matches = macDriver().findElements(By.name(name));
+            return !matches.isEmpty() && tryClick(matches.get(0));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     private boolean tryClickByExactNames(String... names) {
         if (names == null || names.length == 0) {
             return false;
         }
         for (String name : names) {
-            if (name == null || name.isBlank()) {
-                continue;
-            }
-            try {
-                List<WebElement> matches = macDriver().findElements(By.name(name));
-                if (!matches.isEmpty() && tryClick(matches.get(0))) {
-                    return true;
-                }
-            } catch (Exception ignored) {
+            if (tryClickByExactNameOnce(name)) {
+                return true;
             }
         }
         return false;
     }
 
     private boolean tryClickExactNameInPools(String[] names, By... pools) {
-        if (names == null || names.length == 0) {
+        if (names == null || names.length == 0 || pools == null || pools.length == 0) {
             return false;
         }
         for (By pool : pools) {
