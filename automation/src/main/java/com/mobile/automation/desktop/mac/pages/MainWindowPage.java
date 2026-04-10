@@ -99,19 +99,17 @@ public class MainWindowPage extends BaseMacPage {
 
     public void openProfileMenu() {
         String[] profileNames = new String[] { "Profile Profile", "Profile", "Profil", "Akun", "Account" };
+        // Fast path first (single probe): exact name or first popup button.
+        if (tryClickByExactNames(profileNames) || tryClickProfilePopUpButtonNative()) {
+            return;
+        }
         long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
         while (System.nanoTime() < deadline) {
-            if (tryClickProfilePopUpButtonNative()) {
-                return;
-            }
-            if (tryClickExactNameInPools(profileNames, POP_UP_BUTTONS, BUTTONS, OTHER_NODES)) {
-                return;
-            }
-            if (tryClickElementContainingTextInPools("Profile", POP_UP_BUTTONS, BUTTONS, OTHER_NODES)) {
+            if (tryClickByExactNames(profileNames) || tryClickProfilePopUpButtonNative()) {
                 return;
             }
             try {
-                Thread.sleep(120);
+                Thread.sleep(100);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 break;
@@ -125,13 +123,16 @@ public class MainWindowPage extends BaseMacPage {
         String[] logoutNames = new String[] { "Logout", "Log out", "Sign out", "Keluar", "Sign Out" };
         long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
         while (System.nanoTime() < deadline) {
+            if (tryClickByExactNames(logoutNames)) {
+                return;
+            }
             if (tryClickLogoutNativeButton()) {
                 return;
             }
-            if (tryClickExactNameInPools(logoutNames, BUTTONS, OTHER_NODES)) {
+            if (tryClickExactNameInPools(logoutNames, BUTTONS)) {
                 return;
             }
-            if (tryClickElementContainingTextInPools("Logout", BUTTONS, OTHER_NODES)) {
+            if (tryClickElementContainingTextInPools("Logout", BUTTONS)) {
                 return;
             }
             try {
@@ -149,25 +150,26 @@ public class MainWindowPage extends BaseMacPage {
      * Profile entry per Accessibility Inspector: {@code XCUIElementTypePopUpButton}, title {@code Profile Profile}.
      */
     private boolean tryClickProfilePopUpButtonNative() {
-        List<WebElement> popups = macDriver().findElements(POP_UP_BUTTONS);
-        int limit = Math.min(MAX_CLICK_CANDIDATES_PER_POOL, popups.size());
-        for (int i = 0; i < limit; i++) {
-            WebElement el = popups.get(i);
-            String t = safeElementLabel(el);
-            if (t != null && t.toLowerCase().contains("profile")) {
-                if (tryClick(el)) {
-                    return true;
-                }
-            }
+        if (tryClickByExactNames("Profile Profile", "Profile")) {
+            return true;
         }
-        for (String name : new String[] { "Profile Profile", "Profile" }) {
-            try {
-                WebElement el = macDriver().findElement(By.name(name));
-                if (tryClick(el)) {
-                    return true;
+        // Last resort: click first visible popup button without reading labels (expensive on large trees).
+        try {
+            List<WebElement> popups = macDriver().findElements(POP_UP_BUTTONS);
+            int limit = Math.min(3, popups.size());
+            for (int i = 0; i < limit; i++) {
+                WebElement el = popups.get(i);
+                try {
+                    if (el.isDisplayed() && tryClick(el)) {
+                        return true;
+                    }
+                } catch (Exception ignored) {
+                    if (tryClick(el)) {
+                        return true;
+                    }
                 }
-            } catch (Exception ignored) {
             }
+        } catch (Exception ignored) {
         }
         return false;
     }
@@ -221,11 +223,11 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     public boolean isLoginScreenVisibleLikely() {
-        // If PIN is still on screen, we're not logged out yet.
-        if (isPinStepVisibleBySource()) {
+        // Keep this check lightweight: avoid page-source probes here.
+        if (hasPinUiIndicatorsFast()) {
             return false;
         }
-        boolean hasLoginMarkers = hasVisibleElementContaining("Masuk") || hasVisibleElementContaining("Login");
+        boolean hasLoginMarkers = hasAnyElementByExactName("Masuk", "Login");
         boolean hasTextFields = !macDriver().findElements(TEXT_FIELDS).isEmpty();
         boolean hasSecureFields = !macDriver().findElements(SECURE_TEXT_FIELDS).isEmpty();
         return hasLoginMarkers || (hasTextFields && hasSecureFields);
@@ -307,7 +309,7 @@ public class MainWindowPage extends BaseMacPage {
 
     /**
      * After an in-app update we expect the login surface — avoid {@link #isLoginScreenVisibleLikely()} here because it
-     * calls {@link #isPinStepVisibleBySource()} (full page source) on every poll.
+     * may evaluate additional signals on every poll.
      */
     private void waitUntilLoginReadyAfterVersiBaruUpdate(Duration timeout) {
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
@@ -446,15 +448,6 @@ public class MainWindowPage extends BaseMacPage {
             }
         }
         return postLoginHomeVisibleDuringPinFlow() || !isPinStepVisibleQuick();
-    }
-
-    private boolean isPinStepVisibleBySource() {
-        try {
-            String src = String.valueOf(getDriver().getPageSource()).toLowerCase();
-            return src.contains("pin-input-0") || src.contains("masukkan pin");
-        } catch (Exception ignored) {
-            return false;
-        }
     }
 
     /**
@@ -1216,6 +1209,13 @@ public class MainWindowPage extends BaseMacPage {
         return pinPageSourceLastHit;
     }
 
+    private boolean hasPinUiIndicatorsFast() {
+        if (getPinTextFieldsByOrder().size() >= 4) {
+            return true;
+        }
+        return hasAnyElementByExactName("Masukkan PIN", "PIN", "Buat PIN", "Enter PIN", "OTP");
+    }
+
     private boolean hasVisibleElementContaining(String token) {
         String needle = token == null ? "" : token.trim().toLowerCase();
         if (needle.isBlank()) {
@@ -1258,6 +1258,25 @@ public class MainWindowPage extends BaseMacPage {
             try {
                 List<WebElement> elements = macDriver().findElements(By.name(name));
                 if (!elements.isEmpty()) {
+                    return true;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return false;
+    }
+
+    private boolean tryClickByExactNames(String... names) {
+        if (names == null || names.length == 0) {
+            return false;
+        }
+        for (String name : names) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            try {
+                List<WebElement> matches = macDriver().findElements(By.name(name));
+                if (!matches.isEmpty() && tryClick(matches.get(0))) {
                     return true;
                 }
             } catch (Exception ignored) {

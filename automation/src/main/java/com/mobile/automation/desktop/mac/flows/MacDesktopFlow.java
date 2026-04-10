@@ -98,6 +98,7 @@ public class MacDesktopFlow {
     public void logoutFromProfile() {
         runTimedStep("openProfileMenu", main::openProfileMenu);
         runTimedStep("clickLogoutAction", main::clickLogoutAction);
+        runTimedStep("waitForLoginScreenVisible", () -> main.waitForLoginScreenVisible(Duration.ofSeconds(30)));
     }
 
     public void closeAppWindow() {
