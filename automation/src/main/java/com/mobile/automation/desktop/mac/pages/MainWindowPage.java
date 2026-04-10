@@ -96,10 +96,15 @@ public class MainWindowPage extends BaseMacPage {
         tryClickProfileSidebarGuesses();
     }
 
-    /** Profile row in left sidebar: try several pixels — window chrome/layout shifts the hit target. */
+    /**
+     * Profile row in left sidebar (avatar + "Profile" label at bottom).
+     * mac2 pointer actions use the same viewport origin as {@link WebElement#getRect()} — do not add
+     * {@link org.openqa.selenium.WebDriver.Window#getPosition()} or clicks land off the app.
+     */
     private void tryClickProfileSidebarGuesses() {
-        int[] fromBottomPx = new int[] { 22, 30, 38, 46, 54, 62 };
-        int[] xOffsets = new int[] { 20, 28, 36 };
+        int[] fromBottomPx =
+                new int[] { 10, 16, 24, 32, 40, 52, 64, 76, 88 }; // label near bottom + circle above
+        int[] xOffsets = new int[] { 24, 32, 40, 48, 56 }; // narrow rail; bias center-right
         for (int xo : xOffsets) {
             for (int fb : fromBottomPx) {
                 tryClickProfileSidebarAt(xo, fb);
@@ -109,11 +114,9 @@ public class MainWindowPage extends BaseMacPage {
 
     private boolean tryClickProfileSidebarAt(int xOffsetFromLeft, int fromBottomPx) {
         try {
-            var win = getDriver().manage().window();
-            var pos = win.getPosition();
-            var size = win.getSize();
-            int x = pos.getX() + xOffsetFromLeft;
-            int y = pos.getY() + Math.max(120, size.getHeight() - fromBottomPx);
+            var size = getDriver().manage().window().getSize();
+            int x = xOffsetFromLeft;
+            int y = Math.max(96, size.getHeight() - fromBottomPx);
             PointerInput mouse = new PointerInput(PointerInput.Kind.MOUSE, "mouse");
             Sequence click = new Sequence(mouse, 1);
             click.addAction(mouse.createPointerMove(Duration.ZERO, PointerInput.Origin.viewport(), x, y));
@@ -127,12 +130,15 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     public void clickLogoutAction() {
-        // openProfileMenu() already ran the sidebar grid; avoid duplicating ~18 driver performs here.
+        // Brief pause then a tight re-tap of likely profile spots (menu may not have opened).
         try {
             Thread.sleep(350);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         }
+        tryClickProfileSidebarAt(40, 24);
+        tryClickProfileSidebarAt(40, 56);
+        tryClickProfileSidebarAt(32, 40);
         // Shorter accessibility name first when Inspector exposes both.
         tryClickByExactNames("Profile", "Profile Profile");
 
@@ -158,9 +164,13 @@ public class MainWindowPage extends BaseMacPage {
         if (tryClickByExactNames(logoutAll)) {
             return;
         }
-        if (Boolean.parseBoolean(System.getProperty("mac.logout.poolFallback", "true"))
-                && tryClickExactNameInPools(logoutAll, BUTTONS)) {
-            return;
+        if (Boolean.parseBoolean(System.getProperty("mac.logout.poolFallback", "true"))) {
+            if (tryClickExactNameInPools(logoutAll, BUTTONS)) {
+                return;
+            }
+            if (tryClickExactNameInPools(logoutAll, OTHER_NODES)) {
+                return;
+            }
         }
         attachPinDebug("Logout click failed");
         throw new IllegalStateException("Could not click logout");
@@ -172,11 +182,9 @@ public class MainWindowPage extends BaseMacPage {
 
     private boolean tryClickLogoutSidebarAnchorOffset(int fromBottom) {
         try {
-            var win = getDriver().manage().window();
-            var pos = win.getPosition();
-            var size = win.getSize();
-            int x = pos.getX() + 48;
-            int y = pos.getY() + Math.max(110, size.getHeight() - fromBottom);
+            var size = getDriver().manage().window().getSize();
+            int x = 52;
+            int y = Math.max(100, size.getHeight() - fromBottom);
             PointerInput mouse = new PointerInput(PointerInput.Kind.MOUSE, "mouse");
             Sequence click = new Sequence(mouse, 1);
             click.addAction(mouse.createPointerMove(Duration.ZERO, PointerInput.Origin.viewport(), x, y));
