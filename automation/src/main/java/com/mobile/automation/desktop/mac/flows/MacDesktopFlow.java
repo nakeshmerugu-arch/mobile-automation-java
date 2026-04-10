@@ -2,6 +2,7 @@ package com.mobile.automation.desktop.mac.flows;
 
 import com.mobile.automation.desktop.mac.pages.MainWindowPage;
 import io.appium.java_client.AppiumDriver;
+import io.qameta.allure.Allure;
 import org.openqa.selenium.InvalidElementStateException;
 import org.openqa.selenium.NoSuchElementException;
 import org.openqa.selenium.TimeoutException;
@@ -21,6 +22,7 @@ public class MacDesktopFlow {
     private static final Duration VERSI_BARU_UPDATE_MAX = Duration.ofSeconds(45);
     private static final Duration LOGIN_TO_PIN_MAX_WAIT = Duration.ofSeconds(90);
     private static final Duration POST_LOGIN_HOME_WAIT = Duration.ofSeconds(60);
+    private static final String TIMING_FLAG = "mac.timing.enabled";
 
     private final Consumer<String> stepScreenshots;
     private final MainWindowPage main;
@@ -39,60 +41,67 @@ public class MacDesktopFlow {
 
     /** Wait for first interactive UI, maximize, and dismiss optional in-app update if shown. */
     public void prepareLoginScreen() {
-        main.waitForMainWindowLoaded();
-        main.maximizeWindowBeforeCredentials();
-        main.handleOptionalVersiBaruAfterLaunch(VERSI_BARU_PROBE, VERSI_BARU_UPDATE_MAX);
+        runTimedStep("prepareLoginScreen", () -> {
+            main.waitForMainWindowLoaded();
+            main.maximizeWindowBeforeCredentials();
+            main.handleOptionalVersiBaruAfterLaunch(VERSI_BARU_PROBE, VERSI_BARU_UPDATE_MAX);
+        });
     }
 
     /**
      * Fills email/password with the same resilience as the sample test (Versi Baru retry, fallback tap).
      */
     public void loginWithEmailPassword(String email, String password) {
-        try {
-            main.enterCredentials(email, password);
-        } catch (TimeoutException | NoSuchElementException | InvalidElementStateException | IllegalStateException e) {
-            shot("Mac enterCredentials failed — retry Versi Baru / unblock overlays");
-            main.handleOptionalVersiBaruAfterLaunch(VERSI_BARU_PROBE, VERSI_BARU_UPDATE_MAX);
+        runTimedStep("loginWithEmailPassword", () -> {
             try {
                 main.enterCredentials(email, password);
-            } catch (TimeoutException | NoSuchElementException | InvalidElementStateException | IllegalStateException e2) {
-                shot("Mac before fallback click to reach login fields");
-                main.interactWithFirstAvailableElement();
-                shot("Mac main window after fallback overlay/start click");
-                main.enterCredentials(email, password);
+            } catch (TimeoutException | NoSuchElementException | InvalidElementStateException | IllegalStateException e) {
+                shot("Mac enterCredentials failed — retry Versi Baru / unblock overlays");
+                main.handleOptionalVersiBaruAfterLaunch(VERSI_BARU_PROBE, VERSI_BARU_UPDATE_MAX);
+                try {
+                    main.enterCredentials(email, password);
+                } catch (TimeoutException | NoSuchElementException | InvalidElementStateException | IllegalStateException e2) {
+                    shot("Mac before fallback click to reach login fields");
+                    main.interactWithFirstAvailableElement();
+                    shot("Mac main window after fallback overlay/start click");
+                    main.enterCredentials(email, password);
+                }
             }
-        }
+        });
     }
 
     public void submitLogin() {
-        main.clickSubmitUsingButtons();
+        runTimedStep("submitLogin", main::clickSubmitUsingButtons);
     }
 
     public void completePinAndReachHome(String pin) {
-        main.ensurePinStepAfterLoginSubmit(LOGIN_TO_PIN_MAX_WAIT);
-        if (main.isLoggedInHomeVisible()) {
-            main.waitForHomeDashboardVisible(POST_LOGIN_HOME_WAIT);
-            return;
-        }
-        if (!main.hasPinInputsVisible()) {
-            // Some builds transition through a sparse tree before exposing PIN/home markers.
-            main.ensurePinStepAfterLoginSubmit(Duration.ofSeconds(20));
+        runTimedStep("completePinAndReachHome", () -> {
+            main.ensurePinStepAfterLoginSubmit(LOGIN_TO_PIN_MAX_WAIT);
             if (main.isLoggedInHomeVisible()) {
                 main.waitForHomeDashboardVisible(POST_LOGIN_HOME_WAIT);
                 return;
             }
-        }
-        main.enterPinByInputs(pin);
-        main.completePinStep();
-        main.waitForHomeDashboardVisible(HOME_DASHBOARD_WAIT);
+            if (!main.hasPinInputsVisible()) {
+                // Some builds transition through a sparse tree before exposing PIN/home markers.
+                main.ensurePinStepAfterLoginSubmit(Duration.ofSeconds(20));
+                if (main.isLoggedInHomeVisible()) {
+                    main.waitForHomeDashboardVisible(POST_LOGIN_HOME_WAIT);
+                    return;
+                }
+            }
+            main.enterPinByInputs(pin);
+            main.completePinStep();
+            main.waitForHomeDashboardVisible(HOME_DASHBOARD_WAIT);
+        });
     }
 
     public void logoutFromProfile() {
-        main.clickProfileAndLogout();
+        runTimedStep("openProfileMenu", main::openProfileMenu);
+        runTimedStep("clickLogoutAction", main::clickLogoutAction);
     }
 
     public void closeAppWindow() {
-        main.closeWindowAfterLogin();
+        runTimedStep("closeAppWindow", main::closeWindowAfterLogin);
     }
 
     public MainWindowPage mainWindow() {
@@ -102,6 +111,30 @@ public class MacDesktopFlow {
     private void shot(String name) {
         if (stepScreenshots != null) {
             stepScreenshots.accept(name);
+        }
+    }
+
+    private static boolean isTimingEnabled() {
+        return Boolean.parseBoolean(System.getProperty(TIMING_FLAG, "false"));
+    }
+
+    private static void runTimedStep(String step, Runnable action) {
+        if (!isTimingEnabled()) {
+            action.run();
+            return;
+        }
+        long started = System.nanoTime();
+        try {
+            action.run();
+        } finally {
+            long elapsedMs = (System.nanoTime() - started) / 1_000_000L;
+            String msg = "[mac-timing] " + step + " took " + elapsedMs + " ms";
+            System.out.println(msg);
+            try {
+                Allure.addAttachment("mac timing: " + step, "text/plain", msg);
+            } catch (Exception ignored) {
+                // Allure attachment is best-effort only
+            }
         }
     }
 }

@@ -93,30 +93,56 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     public void clickProfileAndLogout() {
-        String[] profileMarkers = new String[] { "Profile", "Profil", "Akun", "Account" };
-        String[] logoutMarkers = new String[] { "Logout", "Log out", "Sign out", "Keluar", "Sign Out" };
+        openProfileMenu();
+        clickLogoutAction();
+    }
 
-        boolean profileClicked = tryClickProfilePopUpButtonNative();
-        if (!profileClicked) {
-            for (String marker : profileMarkers) {
-                if (tryClickElementContainingText(marker)) {
-                    profileClicked = true;
-                    break;
-                }
+    public void openProfileMenu() {
+        String[] profileNames = new String[] { "Profile Profile", "Profile", "Profil", "Akun", "Account" };
+        long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
+        while (System.nanoTime() < deadline) {
+            if (tryClickProfilePopUpButtonNative()) {
+                return;
+            }
+            if (tryClickExactNameInPools(profileNames, POP_UP_BUTTONS, BUTTONS, OTHER_NODES)) {
+                return;
+            }
+            if (tryClickElementContainingTextInPools("Profile", POP_UP_BUTTONS, BUTTONS, OTHER_NODES)) {
+                return;
+            }
+            try {
+                Thread.sleep(120);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
             }
         }
-        if (!profileClicked) {
-            attachPinDebug("Profile click failed");
-            throw new IllegalStateException(
-                    "Could not open profile (XCUIElementTypePopUpButton / name Profile Profile / text markers)");
-        }
+        attachPinDebug("Profile click failed");
+        throw new IllegalStateException("Could not open profile menu");
+    }
 
-        boolean logoutClicked = tryClickLogoutWithin(Duration.ofSeconds(12), logoutMarkers);
-
-        if (!logoutClicked) {
-            attachPinDebug("Logout click failed");
-            throw new IllegalStateException("Could not click logout (XCUIElementTypeButton title Logout or text markers)");
+    public void clickLogoutAction() {
+        String[] logoutNames = new String[] { "Logout", "Log out", "Sign out", "Keluar", "Sign Out" };
+        long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
+        while (System.nanoTime() < deadline) {
+            if (tryClickLogoutNativeButton()) {
+                return;
+            }
+            if (tryClickExactNameInPools(logoutNames, BUTTONS, OTHER_NODES)) {
+                return;
+            }
+            if (tryClickElementContainingTextInPools("Logout", BUTTONS, OTHER_NODES)) {
+                return;
+            }
+            try {
+                Thread.sleep(120);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            }
         }
+        attachPinDebug("Logout click failed");
+        throw new IllegalStateException("Could not click logout");
     }
 
     /**
@@ -1221,27 +1247,6 @@ public class MainWindowPage extends BaseMacPage {
         }
     }
 
-    private boolean tryClickLogoutWithin(Duration timeout, String[] logoutMarkers) {
-        long deadlineNanos = System.nanoTime() + timeout.toNanos();
-        while (System.nanoTime() < deadlineNanos) {
-            if (tryClickLogoutNativeButton()) {
-                return true;
-            }
-            for (String marker : logoutMarkers) {
-                if (tryClickElementContainingText(marker)) {
-                    return true;
-                }
-            }
-            try {
-                Thread.sleep(120);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-        }
-        return false;
-    }
-
     private boolean hasAnyElementByExactName(String... names) {
         if (names == null || names.length == 0) {
             return false;
@@ -1256,6 +1261,31 @@ public class MainWindowPage extends BaseMacPage {
                     return true;
                 }
             } catch (Exception ignored) {
+            }
+        }
+        return false;
+    }
+
+    private boolean tryClickExactNameInPools(String[] names, By... pools) {
+        if (names == null || names.length == 0) {
+            return false;
+        }
+        for (By pool : pools) {
+            List<WebElement> elements = macDriver().findElements(pool);
+            int limit = Math.min(MAX_SCAN_ELEMENTS_PER_POOL, elements.size());
+            for (int i = 0; i < limit; i++) {
+                WebElement el = elements.get(i);
+                String label = safeElementLabel(el);
+                if (label == null) {
+                    continue;
+                }
+                for (String name : names) {
+                    if (name != null && !name.isBlank() && label.trim().equalsIgnoreCase(name)) {
+                        if (tryClick(el)) {
+                            return true;
+                        }
+                    }
+                }
             }
         }
         return false;
