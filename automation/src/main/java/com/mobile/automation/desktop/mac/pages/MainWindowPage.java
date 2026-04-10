@@ -127,14 +127,14 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     public void clickLogoutAction() {
-        // Ensure sheet is open: coordinate grid (fast) then one Profile name pass (moved here from openProfileMenu timing).
-        tryClickProfileSidebarGuesses();
+        // openProfileMenu() already ran the sidebar grid; avoid duplicating ~18 driver performs here.
         try {
-            Thread.sleep(200);
+            Thread.sleep(350);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         }
-        tryClickByExactNames("Profile Profile", "Profile");
+        // Shorter accessibility name first when Inspector exposes both.
+        tryClickByExactNames("Profile", "Profile Profile");
 
         // Loop: only primary logout labels — five By.name calls per tick can stall one iteration past the 8s budget.
         String[] logoutHot = new String[] { "Keluar", "Logout" };
@@ -159,7 +159,7 @@ public class MainWindowPage extends BaseMacPage {
             return;
         }
         if (Boolean.parseBoolean(System.getProperty("mac.logout.poolFallback", "true"))
-                && tryClickExactNameInPools(logoutAll, BUTTONS, OTHER_NODES)) {
+                && tryClickExactNameInPools(logoutAll, BUTTONS)) {
             return;
         }
         attachPinDebug("Logout click failed");
