@@ -6,8 +6,6 @@ import io.appium.java_client.AppiumDriver;
 import org.openqa.selenium.By;
 import org.openqa.selenium.TimeoutException;
 import org.openqa.selenium.WebElement;
-import org.openqa.selenium.NoSuchElementException;
-import org.openqa.selenium.InvalidSelectorException;
 import org.openqa.selenium.Keys;
 import io.qameta.allure.Allure;
 import org.openqa.selenium.interactions.Actions;
@@ -31,10 +29,10 @@ public class MainWindowPage extends BaseMacPage {
     /** After PIN submit / Enter: wait for home or PIN UI to go away. */
     private static final Duration PIN_RESOLVE_TIMEOUT = Duration.ofSeconds(15);
     private static final long PIN_RESOLVE_POLL_MS = 150L;
-    /** Min interval between full {@code getPageSource()} calls for PIN-in-source checks (mac2 XML is large). */
-    private static final long PIN_PAGE_SOURCE_THROTTLE_MS = 300L;
     /** Min interval between home-marker scans in page source (PIN flow must not call this every poll). */
     private static final long HOME_PAGE_SOURCE_THROTTLE_MS = 300L;
+    /** Slow fallback probe interval for PIN markers in page source. */
+    private static final long PIN_PAGE_SOURCE_THROTTLE_MS = 3000L;
     /** Min interval for "Versi Baru" text probes in page source during dialog polling. */
     private static final long VERSI_BARU_PAGE_SOURCE_THROTTLE_MS = 300L;
     /** Post-login home hints exposed in the accessibility tree (no {@code getPageSource}). */
@@ -42,18 +40,11 @@ public class MainWindowPage extends BaseMacPage {
             new String[] { "Market", "Watchlist", "Portfolio", "Trending", "Movers", "Papan Khusus" };
     /** Native profile control: Accessibility Inspector shows type Pop Up Button, title {@code Profile Profile}. */
     private static final By POP_UP_BUTTONS = By.className("XCUIElementTypePopUpButton");
-    /** Web/HTML logout fallback when mac2 exposes the popover as DOM buttons. */
-    private static final String LOGOUT_BUTTON_XPATH =
-            "//button[normalize-space(.)='Logout' or contains(normalize-space(.),'Logout')]";
-    private static final By LOGOUT_WEB_BUTTON = By.xpath(LOGOUT_BUTTON_XPATH);
     /** Poll while waiting for home/dashboard markers after PIN. */
     private static final Duration HOME_DASHBOARD_POLL_INTERVAL = Duration.ofMillis(200);
-    /** Web button label in "Versi Baru Tersedia" dialog (primary action). */
-    private static final String UPDATE_SEKARANG_XPATH =
-            "//button[contains(normalize-space(.),'Update Sekarang')]";
-    private static final String NANTI_DULU_XPATH =
-            "//button[contains(normalize-space(.),'Nanti Dulu')]";
-
+    /** Cap expensive XCUI list scans so one probe can't take minutes on huge trees. */
+    private static final int MAX_SCAN_ELEMENTS_PER_POOL = 40;
+    private static final int MAX_CLICK_CANDIDATES_PER_POOL = 25;
     // Generic locators for mac2/XCUIElementType trees.
     // Using generic types makes the test robust until we capture real accessibility identifiers.
     private static final By STATIC_TEXTS = By.className("XCUIElementTypeStaticText");
@@ -62,12 +53,15 @@ public class MainWindowPage extends BaseMacPage {
     private static final By OTHER_NODES = By.className("XCUIElementTypeOther");
     private static final By TEXT_FIELDS = By.className("XCUIElementTypeTextField");
     private static final By SECURE_TEXT_FIELDS = By.className("XCUIElementTypeSecureTextField");
+    private static final String[] HOME_FAST_NAMES =
+            new String[] { "Market", "Watchlist", "Portfolio", "Trending", "Movers", "Papan Khusus" };
+    private static final String[] PIN_FAST_NAMES =
+            new String[] { "Masukkan PIN", "PIN", "Buat PIN", "Enter PIN", "OTP" };
 
-    /** Throttle expensive {@link #isPinStepVisibleBySource()} when polling in tight loops. */
-    private long pinPageSourceLastProbeMs = 0L;
-    private boolean pinPageSourceLastContainsPinStep = false;
     private long homePageSourceLastProbeMs = 0L;
     private boolean homePageSourceLastMarkersFound = false;
+    private long pinPageSourceLastProbeMs = 0L;
+    private boolean pinPageSourceLastHit = false;
     private long versiBaruPageSourceLastProbeMs = 0L;
     private boolean versiBaruPageSourceLastHit = false;
 
@@ -76,13 +70,14 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     public void waitForMainWindowLoaded() {
-        // Different apps expose different root elements to mac2.
-        // Wait for common "app content" types instead of a specific window title.
+        // Fast exact-name probes first; avoids broad pool waits on large XCUI trees.
+        if (hasAnyElementByExactName("Masuk", "Login", "Profile", "Portfolio")) {
+            return;
+        }
         try {
             waitUtils().waitUntilVisible(BUTTONS);
             return;
         } catch (TimeoutException ignored) {
-            // Fall back to static text.
         }
         waitUtils().waitUntilVisible(STATIC_TEXTS);
     }
@@ -111,54 +106,16 @@ public class MainWindowPage extends BaseMacPage {
             }
         }
         if (!profileClicked) {
-            try {
-                clickByXPath("//button[.//img[@alt='Profile']]");
-                profileClicked = true;
-            } catch (Exception ignored) {
-            }
-        }
-
-        if (!profileClicked) {
             attachPinDebug("Profile click failed");
             throw new IllegalStateException(
-                    "Could not open profile (XCUIElementTypePopUpButton / name Profile Profile, markers, or web avatar XPath)");
+                    "Could not open profile (XCUIElementTypePopUpButton / name Profile Profile / text markers)");
         }
 
-        boolean logoutClicked = false;
-        try {
-            new WebDriverWait(getDriver(), Duration.ofSeconds(8))
-                    .pollingEvery(Duration.ofMillis(120))
-                    .until(d -> {
-                        if (tryClickLogoutNativeButton()) {
-                            return true;
-                        }
-                        for (String marker : logoutMarkers) {
-                            if (tryClickElementContainingText(marker)) {
-                                return true;
-                            }
-                        }
-                        for (WebElement el : macDriver().findElements(LOGOUT_WEB_BUTTON)) {
-                            if (tryClick(el)) {
-                                return true;
-                            }
-                        }
-                        return false;
-                    });
-            logoutClicked = true;
-        } catch (TimeoutException ignored) {
-        }
-
-        if (!logoutClicked) {
-            try {
-                clickByXPath(LOGOUT_BUTTON_XPATH);
-                logoutClicked = true;
-            } catch (Exception ignored) {
-            }
-        }
+        boolean logoutClicked = tryClickLogoutWithin(Duration.ofSeconds(12), logoutMarkers);
 
         if (!logoutClicked) {
             attachPinDebug("Logout click failed");
-            throw new IllegalStateException("Could not click logout (XCUIElementTypeButton title Logout, markers, or web XPath)");
+            throw new IllegalStateException("Could not click logout (XCUIElementTypeButton title Logout or text markers)");
         }
     }
 
@@ -166,7 +123,10 @@ public class MainWindowPage extends BaseMacPage {
      * Profile entry per Accessibility Inspector: {@code XCUIElementTypePopUpButton}, title {@code Profile Profile}.
      */
     private boolean tryClickProfilePopUpButtonNative() {
-        for (WebElement el : macDriver().findElements(POP_UP_BUTTONS)) {
+        List<WebElement> popups = macDriver().findElements(POP_UP_BUTTONS);
+        int limit = Math.min(MAX_CLICK_CANDIDATES_PER_POOL, popups.size());
+        for (int i = 0; i < limit; i++) {
+            WebElement el = popups.get(i);
             String t = safeElementLabel(el);
             if (t != null && t.toLowerCase().contains("profile")) {
                 if (tryClick(el)) {
@@ -190,7 +150,10 @@ public class MainWindowPage extends BaseMacPage {
      * Logout per Accessibility Inspector: {@code XCUIElementTypeButton}, title {@code Logout}.
      */
     private boolean tryClickLogoutNativeButton() {
-        for (WebElement el : macDriver().findElements(BUTTONS)) {
+        List<WebElement> buttons = macDriver().findElements(BUTTONS);
+        int limit = Math.min(MAX_CLICK_CANDIDATES_PER_POOL, buttons.size());
+        for (int i = 0; i < limit; i++) {
+            WebElement el = buttons.get(i);
             String t = safeElementLabel(el);
             if (t != null && "logout".equalsIgnoreCase(t.trim())) {
                 if (tryClick(el)) {
@@ -247,8 +210,7 @@ public class MainWindowPage extends BaseMacPage {
      * the login screen is usable again. If the dialog never appears within {@code probeTimeout}, returns immediately.
      * <p>
      * Uses the same mac2 strategy as the rest of this class: {@code XCUIElementTypeButton} / {@code StaticText} /
-     * {@code Other} via {@link #tryClickElementContainingText} and {@link #hasVisibleElementContaining}, with an
-     * XPath fallback for the web {@code <button>} markup.
+     * {@code Other} via {@link #tryClickElementContainingText} and {@link #hasVisibleElementContaining}.
      */
     public void handleOptionalVersiBaruAfterLaunch(Duration probeTimeout, Duration updateCompleteTimeout) {
         if (probeTimeout == null || probeTimeout.isNegative() || probeTimeout.isZero()) {
@@ -263,13 +225,8 @@ public class MainWindowPage extends BaseMacPage {
 
         boolean clicked = tryClickElementContainingText("Update Sekarang");
         if (!clicked) {
-            try {
-                clickByXPath(UPDATE_SEKARANG_XPATH);
-                clicked = true;
-            } catch (Exception e) {
-                attachPinDebug("Update Sekarang click failed (Versi Baru dialog was visible)");
-                throw new IllegalStateException("Could not click Update Sekarang on Versi Baru dialog", e);
-            }
+            attachPinDebug("Update Sekarang click failed (Versi Baru dialog was visible)");
+            throw new IllegalStateException("Could not click Update Sekarang on Versi Baru dialog");
         }
 
         waitUntilLoginReadyAfterVersiBaruUpdate(updateCompleteTimeout);
@@ -364,7 +321,7 @@ public class MainWindowPage extends BaseMacPage {
      */
     public void clickSubmitUsingButtons() {
         // Prefer the visible label (based on the app: "Masuk").
-        if (tryClickElementContainingText("Masuk")) return;
+        if (tryClickElementContainingTextInPools("Masuk", BUTTONS, OTHER_NODES)) return;
 
         // Generic fallback: click first hittable XCUIElementTypeButton.
         if (tryClickFirstHittable(BUTTONS)) return;
@@ -384,7 +341,7 @@ public class MainWindowPage extends BaseMacPage {
      * Clicks the PIN step submit control. The web form uses a {@code type="button"} labeled "Submit".
      */
     public void clickPinSubmitUsingButtons() {
-        if (tryClickElementContainingText("Submit")) {
+        if (tryClickElementContainingTextInPools("Submit", BUTTONS, OTHER_NODES)) {
             return;
         }
         if (tryClickLowestVisibleButton(BUTTONS)) {
@@ -434,6 +391,18 @@ public class MainWindowPage extends BaseMacPage {
         return isPostLoginHomeVisibleQuick() || isPostLoginStateLikely();
     }
 
+    /** True when PIN input fields are currently exposed in the XCUI tree. */
+    public boolean hasPinInputsVisible() {
+        if (getPinTextFieldsByOrder().size() >= 4) {
+            return true;
+        }
+        // Some builds expose only the title/OTP shell first; accept that as PIN visible.
+        if (hasAnyElementByExactName(PIN_FAST_NAMES)) {
+            return true;
+        }
+        return pinMarkerInPageSourceThrottled();
+    }
+
     private boolean waitUntilPinResolved(Duration timeout) {
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
         while (System.nanoTime() < deadlineNanos) {
@@ -463,29 +432,17 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     /**
-     * Same as {@link #isPinStepVisibleBySource()} but avoids calling {@code getPageSource()} more than
-     * once per {@link #PIN_PAGE_SOURCE_THROTTLE_MS} while polls run in a tight loop.
-     */
-    private boolean isPinStepVisibleBySourceThrottled() {
-        long now = System.currentTimeMillis();
-        if (now - pinPageSourceLastProbeMs < PIN_PAGE_SOURCE_THROTTLE_MS) {
-            return pinPageSourceLastContainsPinStep;
-        }
-        pinPageSourceLastProbeMs = now;
-        pinPageSourceLastContainsPinStep = isPinStepVisibleBySource();
-        return pinPageSourceLastContainsPinStep;
-    }
-
-    /**
      * Clicks the visible button candidate with the largest Y coordinate (bottom-most) on the screen.
      * This avoids relying on label accessibility text which can be flaky in mac2/webviews.
      */
     private boolean tryClickLowestVisibleButton(By locator) {
         try {
             List<WebElement> elements = macDriver().findElements(locator);
+            int limit = Math.min(MAX_CLICK_CANDIDATES_PER_POOL, elements.size());
             WebElement best = null;
             double bestCenterY = Double.NEGATIVE_INFINITY;
-            for (WebElement el : elements) {
+            for (int i = 0; i < limit; i++) {
+                WebElement el = elements.get(i);
                 try {
                     if (!el.isDisplayed()) continue;
                     var r = el.getRect();
@@ -530,111 +487,22 @@ public class MainWindowPage extends BaseMacPage {
 
     /**
      * When the login form is blocked by the in-app update dialog, mac2 may not expose controls as
-     * plain {@code XCUIElementTypeButton} with usable labels. Try label + XPath clicks first.
+     * plain {@code XCUIElementTypeButton} with usable labels. Try text-based XCUI clicks first.
      */
     private boolean tryDismissLoginBlockingOverlays() {
         if (tryClickElementContainingText("Update Sekarang")) {
             return true;
         }
-        if (tryClickAnyPresentByXPath(UPDATE_SEKARANG_XPATH)) {
-            return true;
-        }
         if (tryClickElementContainingText("Nanti Dulu")) {
             return true;
         }
-        if (tryClickAnyPresentByXPath(NANTI_DULU_XPATH)) {
-            return true;
-        }
         return false;
-    }
-
-    private boolean tryClickAnyPresentByXPath(String xpath) {
-        try {
-            for (WebElement el : macDriver().findElements(By.xpath(xpath))) {
-                if (tryClick(el)) {
-                    return true;
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        return false;
-    }
-
-    /**
-     * Clicks an element using XPath (mac2 supports xpath strategy).
-     * Useful when the UI is easier to target via web-like DOM locators.
-     */
-    public void clickByXPath(String xpath) {
-        By locator = By.xpath(xpath);
-        try {
-            waitUtils().waitUntilClickable(locator).click();
-            return;
-        } catch (TimeoutException ignored) {
-            // Fall back to a less strict wait (presence/visibility) because mac2
-            // sometimes doesn't expose "enabled/clickable" reliably for DOM-like xpaths.
-        }
-
-        WaitUtils longerWait = new WaitUtils(getDriver(), Duration.ofSeconds(30));
-        WebElement el = longerWait.waitUntilPresent(locator);
-        el.click();
-    }
-
-    /**
-     * Types into an element located by XPath.
-     * Uses a visible wait, then click + clear + sendKeys; handy for webview inputs.
-     */
-    public void sendKeysByXPath(String xpath, CharSequence text) {
-        WebElement el = macDriver().findElement(By.xpath(xpath));
-        el.clear();
-        el.click();
-        //By el = locator;
-        // try {
-        //     el = waitUtils().waitUntilVisible(locator);
-        // } catch (TimeoutException e) {
-        //     // mac2 + styled web inputs (e.g. transparent PIN dots) are often present but not "visible".
-        //     el = waitUtils().waitUntilPresent(locator);
-        // }
-        // try {
-        //     el.click();
-        // } catch (Exception ignored) {
-        // }
-        // try {
-        //     el.clear();
-        // } catch (Exception ignored) {
-        // }
-        el.sendKeys(text);
-    }
-
-    /**
-     * Returns debug details for an element found by XPath.
-     * Useful for logging what mac2 exposes for a specific locator.
-     */
-    public String getByXpath(String xpath) {
-        try {
-            By locator = By.xpath(xpath);
-            WebElement el = new WaitUtils(getDriver(), Duration.ofSeconds(5)).waitUntilPresent(locator);
-            String text = safeElementLabel(el);
-            String rect = "n/a";
-            try {
-                var r = el.getRect();
-                rect = "x=" + r.getX() + ",y=" + r.getY() + ",w=" + r.getWidth() + ",h=" + r.getHeight();
-            } catch (Exception ignored) {
-            }
-            return "FOUND tag=" + el.getTagName() + ", label=" + (text == null ? "" : text) + ", rect={" + rect + "}";
-        } catch (Exception e) {
-            return "NOT_FOUND xpath=" + xpath + ", reason=" + e.getClass().getSimpleName();
-        }
-    }
-
-    // Alias with conventional camel-case acronym spelling.
-    public String getByXPath(String xpath) {
-        return getByXpath(xpath);
     }
 
     /**
      * Submits the login form using the keyboard after {@link #enterCredentials(String, String)}.
      * Focus should still be on the password field; this sends {@code Tab} {@code tabsBeforeEnter} times
-     * then {@code Enter} — avoids flaky button/ XPath clicks on mac2.
+     * then {@code Enter} — avoids flaky point-and-click behavior on mac2.
      * <p>
      * If submit does not fire, try {@code tabsBeforeEnter = 0} (Enter only) or {@code 2} depending on tab order.
      */
@@ -661,18 +529,10 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     /**
-     * Best-effort click for a "submit" button.
-     * Mac2 XPath often doesn't map 1:1 with HTML DOM xpaths; if the xpath can't be found,
-     * we fall back to clicking the first enabled button.
+     * Best-effort click for a login submit control using XCUI element pools only.
+     * The {@code submitXPath} parameter is intentionally ignored to prevent XPath-based desktop actions.
      */
-    public void clickLoginSubmit(String submitXPath) {
-        try {
-            clickByXPath(submitXPath);
-            return;
-        } catch (TimeoutException | NoSuchElementException | InvalidSelectorException ignored) {
-            // Mac2 may reject HTML-style XPath (XQuery parse) or the node may be missing — use fallbacks.
-        }
-
+    public void clickLoginSubmit(@SuppressWarnings("unused") String submitXPath) {
         // Submit buttons can become visible/enabled shortly after entering credentials.
         // Wait a bit before giving up on fallbacks.
         WaitUtils longerWait = new WaitUtils(getDriver(), Duration.ofSeconds(30));
@@ -684,14 +544,14 @@ public class MainWindowPage extends BaseMacPage {
 
         // Best-effort: click by visible/accessibility text (mac2 can misreport enabled/clickable).
         // Current app label is "Masuk" based on the login screen screenshot.
-        if (tryClickElementContainingText("Masuk")) return;
+        if (tryClickElementContainingTextInPools("Masuk", BUTTONS, OTHER_NODES)) return;
 
         if (tryClickFirstHittable(BUTTONS)) return;
         if (tryClickFirstHittable(OTHER_NODES)) return;
         if (tryClickFirstHittable(STATIC_TEXTS)) return;
 
         attachSubmitClickDebug();
-        throw new IllegalStateException("Could not click submit login button using xpath nor fallback button click");
+        throw new IllegalStateException("Could not click submit login button using XCUI fallback pools");
     }
 
     private void attachSubmitClickDebug() {
@@ -734,6 +594,7 @@ public class MainWindowPage extends BaseMacPage {
         if (elements.isEmpty()) {
             return false;
         }
+        int limit = Math.min(MAX_CLICK_CANDIDATES_PER_POOL, elements.size());
 
         // mac2 sometimes finds nodes that are not marked `isDisplayed()` even though they are visually present.
         // Strategy:
@@ -741,7 +602,8 @@ public class MainWindowPage extends BaseMacPage {
         // 2) If that doesn't work, try all remaining nodes (still in order).
         boolean triedAny = false;
 
-        for (WebElement el : elements) {
+        for (int i = 0; i < limit; i++) {
+            WebElement el = elements.get(i);
             try {
                 if (el.isDisplayed()) {
                     triedAny = true;
@@ -753,7 +615,8 @@ public class MainWindowPage extends BaseMacPage {
         }
 
         // If nothing was "displayed" (or clicks failed), try every candidate anyway.
-        for (WebElement el : elements) {
+        for (int i = 0; i < limit; i++) {
+            WebElement el = elements.get(i);
             if (!triedAny) {
                 // We didn't consider any displayed nodes, so try from the top.
                 if (tryClick(el)) return true;
@@ -803,13 +666,54 @@ public class MainWindowPage extends BaseMacPage {
         if (needle.isBlank()) {
             return false;
         }
+        try {
+            WebElement exact = macDriver().findElement(By.name(partialText));
+            if (tryClick(exact)) {
+                return true;
+            }
+        } catch (Exception ignored) {
+        }
 
         // Try multiple likely node types; the login button is often represented differently
         // depending on whether it's a native button or inside an embedded webview.
         By[] candidates = new By[] { BUTTONS, OTHER_NODES, STATIC_TEXTS };
         for (By locator : candidates) {
             List<WebElement> elements = macDriver().findElements(locator);
-            for (WebElement el : elements) {
+            int limit = Math.min(MAX_SCAN_ELEMENTS_PER_POOL, elements.size());
+            for (int i = 0; i < limit; i++) {
+                WebElement el = elements.get(i);
+                String label = safeElementLabel(el);
+                if (label != null && label.toLowerCase().contains(needle)) {
+                    if (tryClick(el)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean tryClickElementContainingTextInPools(String partialText, By... pools) {
+        String needle = partialText == null ? "" : partialText.trim().toLowerCase();
+        if (needle.isBlank()) {
+            return false;
+        }
+        // First try exact name in the provided pools to avoid matching heading/static labels.
+        for (By pool : pools) {
+            List<WebElement> elements = macDriver().findElements(pool);
+            int limit = Math.min(MAX_SCAN_ELEMENTS_PER_POOL, elements.size());
+            for (int i = 0; i < limit; i++) {
+                WebElement el = elements.get(i);
+                String label = safeElementLabel(el);
+                if (label != null && label.trim().equalsIgnoreCase(partialText)) {
+                    if (tryClick(el)) return true;
+                }
+            }
+        }
+        // Then allow partial contains within the same pools.
+        for (By pool : pools) {
+            List<WebElement> elements = macDriver().findElements(pool);
+            int limit = Math.min(MAX_SCAN_ELEMENTS_PER_POOL, elements.size());
+            for (int i = 0; i < limit; i++) {
+                WebElement el = elements.get(i);
                 String label = safeElementLabel(el);
                 if (label != null && label.toLowerCase().contains(needle)) {
                     if (tryClick(el)) return true;
@@ -824,10 +728,15 @@ public class MainWindowPage extends BaseMacPage {
      * multi‑MB XML on every poll (the SPA often keeps home strings in the DOM).
      */
     private boolean isPostLoginHomeVisibleFromElementsOnly() {
+        if (hasAnyElementByExactName(HOME_FAST_NAMES)) {
+            return true;
+        }
         By[] pools = new By[] { STATIC_TEXTS, BUTTONS, OTHER_NODES };
         for (By loc : pools) {
             List<WebElement> elements = macDriver().findElements(loc);
-            for (WebElement el : elements) {
+            int limit = Math.min(MAX_SCAN_ELEMENTS_PER_POOL, elements.size());
+            for (int i = 0; i < limit; i++) {
+                WebElement el = elements.get(i);
                 String label = safeElementLabel(el);
                 if (label == null) {
                     continue;
@@ -884,7 +793,7 @@ public class MainWindowPage extends BaseMacPage {
      * If PIN source markers and login form controls are both absent, we treat it as post-login state.
      */
     private boolean isPostLoginStateLikely() {
-        if (isPinStepVisibleBySource()) {
+        if (hasPinInputsVisible()) {
             return false;
         }
         boolean hasSecureField = !macDriver().findElements(SECURE_TEXT_FIELDS).isEmpty();
@@ -1074,9 +983,7 @@ public class MainWindowPage extends BaseMacPage {
         if (trimmed.length() != 4) {
             throw new IllegalArgumentException("pin must be exactly 4 digits, got length=" + trimmed.length());
         }
-        if (getPinTextFieldsByOrder().size() < 4
-                && !isPinStepVisibleBySource()
-                && !postLoginHomeVisibleDuringPinFlow()) {
+        if (getPinTextFieldsByOrder().size() < 4 && !postLoginHomeVisibleDuringPinFlow()) {
             waitForPinTextFieldsPopulation(PIN_STEP_PROBE_TIMEOUT);
         }
         Exception primaryFailure = null;
@@ -1102,10 +1009,8 @@ public class MainWindowPage extends BaseMacPage {
      * Helps separate "navigation never reached PIN screen" from "typing failed on PIN screen".
      */
     public void waitForPinStepVisible() {
-        // Do not use isPostLoginStateLikely() here: after login submit, mac2 often briefly exposes
-        // only the menu bar (no text fields / no Masuk), which falsely looks like "past login"
-        // while the PIN webview is still loading.
-        if (isPinStepVisibleBySource() || postLoginHomeVisibleDuringPinFlow()) {
+        // Keep this probe lightweight: avoid page-source scans and broad text-marker traversals.
+        if (getPinTextFieldsByOrder().size() >= 4 || postLoginHomeVisibleDuringPinFlow()) {
             return;
         }
         long deadline = System.nanoTime() + PIN_STEP_PROBE_TIMEOUT.toNanos();
@@ -1114,7 +1019,7 @@ public class MainWindowPage extends BaseMacPage {
             if (postLoginHomeVisibleDuringPinFlow()) {
                 return;
             }
-            if (getPinTextFieldsByOrder().size() >= 4 || hasVisibleElementContaining("PIN")) {
+            if (getPinTextFieldsByOrder().size() >= 4) {
                 return;
             }
             try {
@@ -1136,18 +1041,35 @@ public class MainWindowPage extends BaseMacPage {
      * Intentionally does not click submit again; login submit is handled by {@link #clickSubmitUsingButtons()}.
      */
     public void ensurePinStepAfterLoginSubmit() {
-        if (isPinStepVisibleQuick() || postLoginHomeVisibleDuringPinFlow()) {
-            return;
-        }
+        ensurePinStepAfterLoginSubmit(PIN_STEP_PROBE_TIMEOUT);
+    }
 
-        waitForPinStepVisible();
+    /**
+     * Bounded wait after login submit for either PIN inputs or home transition.
+     * Uses XCUI element checks only (no page-source probing).
+     */
+    public void ensurePinStepAfterLoginSubmit(Duration timeout) {
+        if (timeout == null || timeout.isNegative() || timeout.isZero()) {
+            throw new IllegalArgumentException("timeout must be positive");
+        }
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            if (hasPinInputsVisible() || postLoginHomeVisibleDuringPinFlow() || isPostLoginStateLikely()) {
+                return;
+            }
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        attachPinDebug("PIN step not visible within " + timeout.toSeconds() + "s after login submit");
+        throw new IllegalStateException("PIN step (or home) did not appear within " + timeout + " after login submit");
     }
 
     private boolean isPinStepVisibleQuick() {
-        if (getPinTextFieldsByOrder().size() >= 4 || hasVisibleElementContaining("PIN")) {
-            return true;
-        }
-        return isPinStepVisibleBySourceThrottled();
+        return hasPinInputsVisible();
     }
 
     /**
@@ -1159,7 +1081,6 @@ public class MainWindowPage extends BaseMacPage {
             new WebDriverWait(getDriver(), timeout)
                     .pollingEvery(PIN_STEP_POLL_INTERVAL)
                     .until(d -> getPinTextFieldsByOrder().size() >= 4
-                            || isPinStepVisibleQuick()
                             || postLoginHomeVisibleDuringPinFlow());
         } catch (TimeoutException ignored) {
             // proceed; enterPinViaPerDigitLocators / fallbacks will fail with debug attachment
@@ -1232,7 +1153,41 @@ public class MainWindowPage extends BaseMacPage {
 
     private List<WebElement> getPinTextFieldsByOrder() {
         List<WebElement> fields = macDriver().findElements(TEXT_FIELDS);
-        return fields == null ? java.util.Collections.emptyList() : fields;
+        if (fields == null || fields.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+        // Prefer true PIN fields when identifiers are exposed (pin-input-0..3), then fall back to first visible set.
+        java.util.List<WebElement> pinLike = new java.util.ArrayList<>();
+        int limit = Math.min(Math.max(MAX_SCAN_ELEMENTS_PER_POOL, 80), fields.size());
+        for (int i = 0; i < limit; i++) {
+            WebElement el = fields.get(i);
+            String label = safeElementLabel(el);
+            if (label != null && label.toLowerCase().contains("pin-input-")) {
+                pinLike.add(el);
+            }
+        }
+        if (!pinLike.isEmpty()) {
+            return pinLike;
+        }
+        return fields;
+    }
+
+    private boolean pinMarkerInPageSourceThrottled() {
+        long now = System.currentTimeMillis();
+        if (now - pinPageSourceLastProbeMs < PIN_PAGE_SOURCE_THROTTLE_MS) {
+            return pinPageSourceLastHit;
+        }
+        pinPageSourceLastProbeMs = now;
+        try {
+            String src = String.valueOf(getDriver().getPageSource()).toLowerCase();
+            pinPageSourceLastHit = src.contains("pin-input-0")
+                    || src.contains("masukkan pin")
+                    || src.contains("pin")
+                    || src.contains("otp");
+        } catch (Exception ignored) {
+            pinPageSourceLastHit = false;
+        }
+        return pinPageSourceLastHit;
     }
 
     private boolean hasVisibleElementContaining(String token) {
@@ -1240,9 +1195,15 @@ public class MainWindowPage extends BaseMacPage {
         if (needle.isBlank()) {
             return false;
         }
+        if (hasAnyElementByExactName(token)) {
+            return true;
+        }
         By[] pools = new By[] { STATIC_TEXTS, BUTTONS, OTHER_NODES };
         for (By pool : pools) {
-            for (WebElement el : macDriver().findElements(pool)) {
+            List<WebElement> elements = macDriver().findElements(pool);
+            int limit = Math.min(MAX_SCAN_ELEMENTS_PER_POOL, elements.size());
+            for (int i = 0; i < limit; i++) {
+                WebElement el = elements.get(i);
                 String label = safeElementLabel(el);
                 if (label != null && label.toLowerCase().contains(needle)) {
                     return true;
@@ -1258,6 +1219,46 @@ public class MainWindowPage extends BaseMacPage {
             Allure.addAttachment(title, "text/xml", source);
         } catch (Exception ignored) {
         }
+    }
+
+    private boolean tryClickLogoutWithin(Duration timeout, String[] logoutMarkers) {
+        long deadlineNanos = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadlineNanos) {
+            if (tryClickLogoutNativeButton()) {
+                return true;
+            }
+            for (String marker : logoutMarkers) {
+                if (tryClickElementContainingText(marker)) {
+                    return true;
+                }
+            }
+            try {
+                Thread.sleep(120);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasAnyElementByExactName(String... names) {
+        if (names == null || names.length == 0) {
+            return false;
+        }
+        for (String name : names) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            try {
+                List<WebElement> elements = macDriver().findElements(By.name(name));
+                if (!elements.isEmpty()) {
+                    return true;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return false;
     }
 
     /**
