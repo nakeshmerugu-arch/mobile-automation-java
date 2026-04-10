@@ -32,13 +32,13 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 ### Automation mode (required for Mac2 on recent macOS)
 
 ```bash
-sudo /usr/sbin/automationmodetool enable-automationmode-without-authentication
+sudo /usr/bin/automationmodetool enable-automationmode-without-authentication
 ```
 
 (Validate the tool exists first if you hit `command not found`.)
 
 ```bash
-ls -l /usr/sbin/automationmodetool
+ls -l /usr/bin/automationmodetool
 ```
 
 If the file is missing, verify Xcode is installed and the active developer directory is correct:
@@ -208,7 +208,7 @@ cd automation && mvn allure:serve
 |---------|----------------|
 | **Session / launch failed** | App path absolute? Bundle opens in Finder? `xattr -cr`? `bundleId` matches? |
 | **“Accessibility not loaded” / empty tree** | Permissions; app foreground; wait longer after launch. |
-| **`/usr/sbin/automationmodetool: command not found`** | Run `ls -l /usr/sbin/automationmodetool`; if missing, install/open Xcode once and re-run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`, then retry the command. |
+| **`/usr/bin/automationmodetool: command not found`** | Run `ls -l /usr/bin/automationmodetool`; if missing, install/open Xcode once and re-run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`, then retry the command. |
 | **Very slow PIN or update steps** | Avoid committing huge blobs; tests use element-first waits—ensure `getPageSource()` isn’t in a tight custom loop. |
 | **Git push timeout** | Don’t commit `.app` / `.dmg` / `node_modules`; keep binaries out of Git or use Git LFS. |
 

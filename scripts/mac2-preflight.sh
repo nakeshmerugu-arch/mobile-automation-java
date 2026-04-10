@@ -56,16 +56,16 @@ else
 fi
 
 section "automationmodetool"
-if [[ -x "/usr/sbin/automationmodetool" ]]; then
-  pass "/usr/sbin/automationmodetool exists and is executable"
-  AM_STATUS="$(/usr/sbin/automationmodetool 2>/dev/null || true)"
+if [[ -x "/usr/bin/automationmodetool" ]]; then
+  pass "/usr/bin/automationmodetool exists and is executable"
+  AM_STATUS="$(/usr/bin/automationmodetool 2>/dev/null || true)"
   if [[ -n "${AM_STATUS}" ]]; then
     pass "automationmodetool status: ${AM_STATUS//$'\n'/ | }"
   else
     warn "Could not read automation mode status (may require elevated privileges)."
   fi
 else
-  fail "/usr/sbin/automationmodetool not found. Run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
+  fail "/usr/bin/automationmodetool not found. Run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
 fi
 
 section "Node / Appium / mac2"
