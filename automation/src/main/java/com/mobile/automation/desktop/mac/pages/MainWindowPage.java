@@ -41,6 +41,13 @@ public class MainWindowPage extends BaseMacPage {
     /** Cap expensive XCUI list scans so one probe can't take minutes on huge trees. */
     private static final int MAX_SCAN_ELEMENTS_PER_POOL = 40;
     private static final int MAX_CLICK_CANDIDATES_PER_POOL = 25;
+    /**
+     * Logout pool fallback: each inspected element must stay cheap (mac2 round-trip per attribute).
+     * {@link #mac2AccessibilityLabelFast} uses at most a few reads per element; keep the cap modest.
+     */
+    private static final int LOGOUT_POOL_SCAN_DEFAULT = 40;
+    private static final int LOGOUT_POOL_SCAN_MIN = 12;
+    private static final int LOGOUT_POOL_SCAN_MAX = 60;
     // Generic locators for mac2/XCUIElementType trees.
     // Using generic types makes the test robust until we capture real accessibility identifiers.
     private static final By STATIC_TEXTS = By.className("XCUIElementTypeStaticText");
@@ -130,25 +137,62 @@ public class MainWindowPage extends BaseMacPage {
     }
 
     public void clickLogoutAction() {
+        var timeouts = getDriver().manage().timeouts();
+        Duration implicitRestore;
+        try {
+            implicitRestore = timeouts.getImplicitWaitTimeout();
+        } catch (Exception e) {
+            implicitRestore = Duration.ZERO;
+        }
+        try {
+            timeouts.implicitlyWait(Duration.ZERO);
+            executeClickLogoutAction();
+        } finally {
+            try {
+                timeouts.implicitlyWait(implicitRestore);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /**
+     * Logout click sequence. {@link #openProfileMenu()} usually runs first in the flow; after coordinate nudges,
+     * try Keluar/Logout <em>before</em> {@code By.name("Profile")} so mac2 does not pay for two Profile lookups
+     * when the sheet is already open.
+     */
+    private void executeClickLogoutAction() {
         // Brief pause then a tight re-tap of likely profile spots (menu may not have opened).
         try {
             Thread.sleep(350);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         }
+        String[] logoutHot = new String[] { "Keluar", "Logout" };
         tryClickProfileSidebarAt(40, 24);
         tryClickProfileSidebarAt(40, 56);
         tryClickProfileSidebarAt(32, 40);
+        tryClickLogoutSidebarAnchorSweep();
+        if (tryClickByExactNameOnce("Keluar")) {
+            return;
+        }
+        if (tryClickByExactNameOnce("Logout")) {
+            return;
+        }
         // Shorter accessibility name first when Inspector exposes both.
         tryClickByExactNames("Profile", "Profile Profile");
 
-        // Loop: only primary logout labels — five By.name calls per tick can stall one iteration past the 8s budget.
-        String[] logoutHot = new String[] { "Keluar", "Logout" };
-        String[] logoutAll =
-                new String[] { "Keluar", "Logout", "Log out", "Sign out", "Sign Out" };
-        long deadline = System.nanoTime() + Duration.ofSeconds(8).toNanos();
-        while (System.nanoTime() < deadline) {
-            if (tryClickByExactNames(logoutHot)) {
+        if (tryClickByExactNameOnce("Keluar")) {
+            return;
+        }
+        if (tryClickByExactNameOnce("Logout")) {
+            return;
+        }
+
+        // One By.name per loop body so a single iteration cannot ignore the time budget.
+        long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+        for (int tick = 0; System.nanoTime() < deadline; tick++) {
+            String primary = logoutHot[tick % logoutHot.length];
+            if (tryClickByExactNameOnce(primary)) {
                 return;
             }
             tryClickLogoutSidebarAnchor();
@@ -161,19 +205,114 @@ public class MainWindowPage extends BaseMacPage {
                 break;
             }
         }
-        if (tryClickByExactNames(logoutAll)) {
+        if (Boolean.parseBoolean(System.getProperty("mac.logout.extraNames", "false"))) {
+            String[] logoutExtras = new String[] { "Log out", "Sign out", "Sign Out" };
+            for (String n : logoutExtras) {
+                if (tryClickByExactNameOnce(n)) {
+                    return;
+                }
+            }
+        }
+        if (tryLogoutHotPoolFallback(logoutHot)) {
             return;
         }
-        if (Boolean.parseBoolean(System.getProperty("mac.logout.poolFallback", "true"))) {
-            if (tryClickExactNameInPools(logoutAll, BUTTONS)) {
-                return;
-            }
-            if (tryClickExactNameInPools(logoutAll, OTHER_NODES)) {
+        if (Boolean.parseBoolean(System.getProperty("mac.logout.poolOtherNodes", "false"))) {
+            int otherLim = Math.min(logoutPoolScanLimit(), MAX_SCAN_ELEMENTS_PER_POOL);
+            if (tryClickExactNamesInPool(logoutHot, OTHER_NODES, otherLim)) {
                 return;
             }
         }
-        attachPinDebug("Logout click failed");
+        if (Boolean.parseBoolean(System.getProperty("mac.debug.pagesource", "false"))) {
+            attachPinDebug("Logout click failed");
+        } else {
+            attachPinDebugLight("Logout click failed");
+        }
         throw new IllegalStateException("Could not click logout");
+    }
+
+    /** Best-effort taps down the left rail where "Keluar" often sits under the profile row (no {@code By.name}). */
+    private void tryClickLogoutSidebarAnchorSweep() {
+        int[] fromBottomPx = new int[] { 52, 60, 68, 76, 86, 94, 104, 116, 128, 140 };
+        for (int fb : fromBottomPx) {
+            tryClickLogoutSidebarAnchorOffset(fb);
+        }
+    }
+
+    private int logoutPoolScanLimit() {
+        try {
+            int v = Integer.parseInt(
+                    System.getProperty("mac.logout.poolScanLimit", String.valueOf(LOGOUT_POOL_SCAN_DEFAULT)));
+            return Math.max(LOGOUT_POOL_SCAN_MIN, Math.min(LOGOUT_POOL_SCAN_MAX, v));
+        } catch (NumberFormatException e) {
+            return LOGOUT_POOL_SCAN_DEFAULT;
+        }
+    }
+
+    /**
+     * Clicks Keluar/Logout by scanning one pool with {@link #mac2AccessibilityLabelFast} only — avoids
+     * {@link #safeElementLabel} which can issue many driver calls per element and make pool scans slower than
+     * a few {@code By.name} queries.
+     */
+    private boolean tryClickExactNamesInPool(String[] names, By pool, int maxScan) {
+        if (names == null || names.length == 0 || pool == null || maxScan <= 0) {
+            return false;
+        }
+        try {
+            List<WebElement> elements = macDriver().findElements(pool);
+            int limit = Math.min(maxScan, elements.size());
+            for (int i = 0; i < limit; i++) {
+                WebElement el = elements.get(i);
+                String label = mac2AccessibilityLabelFast(el);
+                if (label == null) {
+                    continue;
+                }
+                String trimmed = label.trim();
+                for (String name : names) {
+                    if (name != null
+                            && !name.isBlank()
+                            && trimmed.equalsIgnoreCase(name.trim())
+                            && tryClick(el)) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    /** Opt-in: {@code -Dmac.logout.poolFallback=true}. Default off — pool path still costs one snapshot per pool type. */
+    private boolean tryLogoutHotPoolFallback(String[] logoutHot) {
+        if (!Boolean.parseBoolean(System.getProperty("mac.logout.poolFallback", "false"))) {
+            return false;
+        }
+        int lim = logoutPoolScanLimit();
+        if (tryClickExactNamesInPool(logoutHot, BUTTONS, lim)) {
+            return true;
+        }
+        return tryClickExactNamesInPool(logoutHot, STATIC_TEXTS, lim);
+    }
+
+    /**
+     * Minimal label reads for pool iteration (mac2); stop at first non-blank.
+     */
+    private String mac2AccessibilityLabelFast(WebElement el) {
+        if (el == null) {
+            return null;
+        }
+        String n = safeGetAttribute(el, "name");
+        if (n != null) {
+            return n;
+        }
+        n = safeGetAttribute(el, "label");
+        if (n != null) {
+            return n;
+        }
+        n = safeGetText(el);
+        if (n != null) {
+            return n;
+        }
+        return safeGetAttribute(el, "value");
     }
 
     private boolean tryClickLogoutSidebarAnchor() {
@@ -1046,26 +1185,57 @@ public class MainWindowPage extends BaseMacPage {
 
     /**
      * Bounded wait after login submit for either PIN inputs or home transition.
-     * Uses XCUI element checks only (no page-source probing).
+     * <p>
+     * Uses a <strong>cheap</strong> poll only: one {@code findElements(TEXT_FIELDS)} plus at most <strong>one</strong>
+     * {@code By.name} per iteration (rotating through PIN and home markers). The previous implementation called
+     * {@link #hasPinInputsVisible()} every 200ms, which scans many text fields with {@link #safeElementLabel} and
+     * could spend minutes in a single iteration on mac2, blowing the wall-clock timeout.
      */
     public void ensurePinStepAfterLoginSubmit(Duration timeout) {
         if (timeout == null || timeout.isNegative() || timeout.isZero()) {
             throw new IllegalArgumentException("timeout must be positive");
         }
         long deadline = System.nanoTime() + timeout.toNanos();
+        int probeTick = 0;
         while (System.nanoTime() < deadline) {
-            if (hasPinInputsVisible() || postLoginHomeVisibleDuringPinFlow() || isPostLoginStateLikely()) {
+            if (pinOrHomeVisibleAfterSubmitProbe(probeTick)) {
                 return;
             }
+            probeTick++;
             try {
-                Thread.sleep(200);
+                Thread.sleep(250);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 break;
             }
         }
-        attachPinDebug("PIN step not visible within " + timeout.toSeconds() + "s after login submit");
+        String pinWaitMsg = "PIN step not visible within " + timeout.toSeconds() + "s after login submit";
+        if (Boolean.parseBoolean(System.getProperty("mac.debug.pagesource", "false"))) {
+            attachPinDebug(pinWaitMsg);
+        } else {
+            attachPinDebugLight(pinWaitMsg);
+        }
         throw new IllegalStateException("PIN step (or home) did not appear within " + timeout + " after login submit");
+    }
+
+    /**
+     * One poll tick: cheap field count + a single accessibility name query (rotating), so mac2 is not hammered with
+     * deep scans on every sleep interval.
+     */
+    private boolean pinOrHomeVisibleAfterSubmitProbe(int probeTick) {
+        List<WebElement> tf = macDriver().findElements(TEXT_FIELDS);
+        int n = tf == null ? 0 : tf.size();
+        if (n >= 4) {
+            return true;
+        }
+        String[] pin = PIN_FAST_NAMES;
+        String[] home = HOME_FAST_NAMES;
+        int cycle = pin.length + home.length;
+        int idx = Math.floorMod(probeTick, cycle);
+        if (idx < pin.length) {
+            return hasAnyElementByExactName(pin[idx]);
+        }
+        return hasAnyElementByExactName(home[idx - pin.length]);
     }
 
     private boolean isPinStepVisibleQuick() {
@@ -1228,6 +1398,17 @@ public class MainWindowPage extends BaseMacPage {
         }
     }
 
+    private void attachPinDebugLight(String title) {
+        try {
+            Allure.addAttachment(
+                    title,
+                    "text/plain",
+                    "No page source (avoid multi-minute getPageSource on mac2). "
+                            + "Set -Dmac.debug.pagesource=true on failure paths that should attach full XML.");
+        } catch (Exception ignored) {
+        }
+    }
+
     private boolean hasAnyElementByExactName(String... names) {
         if (names == null || names.length == 0) {
             return false;
@@ -1266,31 +1447,6 @@ public class MainWindowPage extends BaseMacPage {
         for (String name : names) {
             if (tryClickByExactNameOnce(name)) {
                 return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean tryClickExactNameInPools(String[] names, By... pools) {
-        if (names == null || names.length == 0 || pools == null || pools.length == 0) {
-            return false;
-        }
-        for (By pool : pools) {
-            List<WebElement> elements = macDriver().findElements(pool);
-            int limit = Math.min(MAX_SCAN_ELEMENTS_PER_POOL, elements.size());
-            for (int i = 0; i < limit; i++) {
-                WebElement el = elements.get(i);
-                String label = safeElementLabel(el);
-                if (label == null) {
-                    continue;
-                }
-                for (String name : names) {
-                    if (name != null && !name.isBlank() && label.trim().equalsIgnoreCase(name)) {
-                        if (tryClick(el)) {
-                            return true;
-                        }
-                    }
-                }
             }
         }
         return false;

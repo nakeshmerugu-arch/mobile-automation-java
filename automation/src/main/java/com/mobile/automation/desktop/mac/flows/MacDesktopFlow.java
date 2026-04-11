@@ -19,7 +19,8 @@ public class MacDesktopFlow {
 
     private static final Duration VERSI_BARU_PROBE = Duration.ofSeconds(3);
     private static final Duration VERSI_BARU_UPDATE_MAX = Duration.ofSeconds(12);
-    private static final Duration LOGIN_TO_PIN_MAX_WAIT = Duration.ofSeconds(35);
+    /** After login submit: wait for PIN or home. Override with {@code -Dmac.loginToPinWaitSeconds=90}. */
+    private static final Duration LOGIN_TO_PIN_MAX_WAIT = Duration.ofSeconds(parseLoginToPinWaitSeconds());
     private static final Duration POST_PIN_HOME_WAIT = Duration.ofSeconds(6);
     private static final String TIMING_FLAG = "mac.timing.enabled";
 
@@ -115,6 +116,15 @@ public class MacDesktopFlow {
     private void shot(String name) {
         if (stepScreenshots != null) {
             stepScreenshots.accept(name);
+        }
+    }
+
+    private static int parseLoginToPinWaitSeconds() {
+        try {
+            int s = Integer.parseInt(System.getProperty("mac.loginToPinWaitSeconds", "90"));
+            return Math.max(15, Math.min(s, 300));
+        } catch (NumberFormatException e) {
+            return 90;
         }
     }
 

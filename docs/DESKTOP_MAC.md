@@ -31,9 +31,21 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
 ### Automation mode (required for Mac2 on recent macOS)
 
+Try **without** `sudo` first (often enough on a normal Mac account):
+
+```bash
+/usr/bin/automationmodetool enable-automationmode-without-authentication
+```
+
+If macOS prompts for your password and returns **`Authentication failed, incorrect password or not an administrator`**, your account is probably **not an admin** (common on company Macs) or the password was wrong. An **administrator** must run the same command once, or IT must grant admin / run it via MDM.
+
+Only use `sudo` if your environment expects it **and** your user is allowed to run that binary as root:
+
 ```bash
 sudo /usr/bin/automationmodetool enable-automationmode-without-authentication
 ```
+
+If you see **`Sorry, user … is not allowed to execute … as root`**, that is a **sudoers / MDM policy** restriction: ask IT to run the command, adjust sudoers, or use a profile that permits it. It is not something the test repo can bypass.
 
 (Validate the tool exists first if you hit `command not found`.)
 
@@ -129,6 +141,18 @@ Example overrides:
 
 **Note:** For Mac2 you typically set **`appium:appPath`** (not only the generic `app` capability). Align with your `PropertiesDriverConfig` / caps builder.
 
+**Optional JVM flags (Maven `-D…`):**
+
+| Flag | Purpose |
+|------|---------|
+| `mac.timing.enabled=true` | Per-step timing logs + Allure attachments |
+| `mac.loginToPinWaitSeconds` | Seconds to wait after login submit for PIN or home (default **90**, clamped 15–300) |
+| `mac.debug.pagesource=true` | On some failure paths, attach full page source (can take **minutes** on large trees) |
+| `mac.logout.extraNames=true` | After the main poll, also try `Log out` / `Sign out` / `Sign Out` via `By.name` (default **off**; each call can be slow on mac2) |
+| `mac.logout.poolFallback=true` | After `By.name` / loop, scan button + static pools for Keluar/Logout using **few** attribute reads per element (default **off**; each pool still does one `findElements`) |
+| `mac.logout.poolOtherNodes=true` | With pool fallback, also scan `XCUIElementTypeOther` (default **off**) |
+| `mac.logout.poolScanLimit` | Max elements checked per pool when pool fallback is on (default **40**, clamped 12–60) |
+
 Credentials and secrets should stay in **environment variables** or CI secrets—not committed properties files.
 
 ## Build the project
@@ -209,7 +233,10 @@ cd automation && mvn allure:serve
 | **Session / launch failed** | App path absolute? Bundle opens in Finder? `xattr -cr`? `bundleId` matches? |
 | **“Accessibility not loaded” / empty tree** | Permissions; app foreground; wait longer after launch. |
 | **`/usr/bin/automationmodetool: command not found`** | Run `ls -l /usr/bin/automationmodetool`; if missing, install/open Xcode once and re-run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`, then retry the command. |
+| **`Sorry, user … is not allowed to execute … automationmodetool … as root`** | Do not use `sudo` for that user; run `/usr/bin/automationmodetool …` without sudo, or ask IT/admin to enable automation mode / adjust sudoers. |
+| **`Authentication failed, incorrect password or not an administrator`** | The tool needs an **admin** Mac user. Confirm **System Settings → Users & Groups** shows **Allow user to administer this computer** for your account, or ask IT to run `automationmodetool` once / add you to admins. Wrong password also produces this message. |
 | **Very slow PIN or update steps** | Avoid committing huge blobs; tests use element-first waits—ensure `getPageSource()` isn’t in a tight custom loop. |
+| **`completePinAndReachHome` many minutes then PIN timeout** | Often **Allure `getPageSource()` on failure** (huge WebView XML). Failures now use a light attachment by default; use `-Dmac.debug.pagesource=true` only when you need XML. Increase wait: `-Dmac.loginToPinWaitSeconds=120`. |
 | **Git push timeout** | Don’t commit `.app` / `.dmg` / `node_modules`; keep binaries out of Git or use Git LFS. |
 
 ## Related files
